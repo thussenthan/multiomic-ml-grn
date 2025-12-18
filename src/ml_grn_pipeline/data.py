@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import gzip
@@ -6,12 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from sklearn.utils import sparsefuncs
-
 import anndata as ad
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
+from sklearn.utils import sparsefuncs
 
 from .config import PathsConfig, TrainingConfig
 from .logging_utils import get_logger
@@ -70,6 +70,15 @@ class GeneDataset:
         return int(self.X.shape[1])
 
 
+def _bin_label(bin_idx: int, training: TrainingConfig, gene: GeneInfo) -> str:
+    """Label bins relative to the gene TSS, oriented by strand."""
+    start_offset = (bin_idx * training.bin_size_bp) - training.window_bp
+    end_offset = ((bin_idx + 1) * training.bin_size_bp) - training.window_bp
+    if gene.strand == "-":
+        start_offset, end_offset = -end_offset, -start_offset
+    return f"bin_{int(start_offset)}_to_{int(end_offset)}"
+
+
 def _compute_gene_features_all_cells(
     gene: GeneInfo,
     peak_indexer: PeakIndexer,
@@ -82,14 +91,12 @@ def _compute_gene_features_all_cells(
     if num_bins <= 0:
         raise ValueError("Invalid bin configuration")
 
-    feature_names = [
-        f"bin_{(i * training.bin_size_bp) - training.window_bp}_to_{((i + 1) * training.bin_size_bp) - training.window_bp}"
-        for i in range(num_bins)
-    ]
-
     features = np.zeros((peak_indexer.n_cells, num_bins), dtype=np.float32)
     if indices.size == 0:
-        return features, feature_names
+        return features, [
+            f"bin_{(i * training.bin_size_bp) - training.window_bp}_to_{((i + 1) * training.bin_size_bp) - training.window_bp}"
+            for i in range(num_bins)
+        ]
 
     matrix = peak_indexer.matrix[:, indices]
     if sp.issparse(matrix):
@@ -110,6 +117,15 @@ def _compute_gene_features_all_cells(
             sub = matrix[:, cols]
             summed = np.sum(sub, axis=1)
         features[:, b] = summed
+
+
+    # Orient bins relative to transcription direction: negative = upstream, positive = downstream
+    if gene.strand == "-":
+        features = features[:, ::-1]
+        order = list(reversed(range(num_bins)))
+    else:
+        order = list(range(num_bins))
+    feature_names = [_bin_label(i, training, gene) for i in order]
 
     return features, feature_names
 
@@ -146,6 +162,8 @@ def preprocess_modalities(
             atac.layers[training.atac_layer] = _tfidf_matrix(atac.X)
         elif training.atac_layer == "counts_per_million":
             atac.layers[training.atac_layer] = _counts_per_million(atac.X)
+        elif training.atac_layer == "log1p_cpm":
+            atac.layers[training.atac_layer] = _log1p_cpm(atac.X)
         else:
             _LOG.warning(
                 "Unknown ATAC layer requested: %s; skipping normalization",
@@ -361,6 +379,9 @@ def select_genes(
             raise ValueError("Requested genes not found in annotations")
     else:
         filtered = genes
+
+    # Always return a deterministic alphabetical ordering to keep training/inference aligned.
+    filtered = sorted(filtered, key=lambda g: (g.gene_name.lower(), g.gene_id.lower()))
     if max_genes is not None:
         filtered = filtered[:max_genes]
     return filtered
@@ -408,10 +429,14 @@ def build_gene_dataset(
         )
 
     cell_ids = np.asarray(rna.obs_names).astype(str)
-
     if training.group_key and training.group_key in rna.obs.columns:
         group_labels = rna.obs[training.group_key].astype(str).to_numpy()
     else:
+        if training.group_key:
+            _LOG.warning(
+                "group_key='%s' not found in RNA obs; falling back to ungrouped labels",
+                training.group_key,
+            )
         group_labels = np.asarray(rna.obs_names).astype(str)
 
     start = gene.tss - training.window_bp
@@ -444,10 +469,14 @@ def build_cellwise_dataset(
 
     cell_ids = np.asarray(rna.obs_names).astype(str)
     rna_var = np.asarray(rna.var_names).astype(str)
-
     if training.group_key and training.group_key in rna.obs.columns:
         group_labels = rna.obs[training.group_key].astype(str).to_numpy()
     else:
+        if training.group_key:
+            _LOG.warning(
+                "group_key='%s' not found in RNA obs; falling back to per-cell grouping",
+                training.group_key,
+            )
         group_labels = np.asarray(rna.obs_names).astype(str)
 
     if training.rna_expression_layer and training.rna_expression_layer in rna.layers:
@@ -524,6 +553,59 @@ def build_cellwise_dataset(
         genes=selected_genes,
         X=X,
         y=Y,
+        cell_ids=cell_ids,
+        feature_names=feature_names,
+        group_labels=group_labels,
+        feature_block_slices=block_slices,
+    )
+
+
+def build_cellwise_features_only(
+    genes: List[GeneInfo],
+    atac: ad.AnnData,
+    peak_indexer: PeakIndexer,
+    training: TrainingConfig,
+) -> CellwiseDataset:
+    """Construct cell-wise feature matrix without RNA targets (for inference)."""
+
+    if not genes:
+        raise ValueError("No genes provided for cell-wise feature construction")
+
+    cell_ids = np.asarray(atac.obs_names).astype(str)
+    group_labels = np.asarray(cell_ids)
+    feature_blocks: List[np.ndarray] = []
+    selected_genes: List[GeneInfo] = []
+    feature_names: List[str] = []
+    block_slices: List[Tuple[int, int]] = []
+    offset = 0
+
+    for gene in genes:
+        features, bin_names = _compute_gene_features_all_cells(
+            gene,
+            peak_indexer,
+            training,
+        )
+        if features.size == 0:
+            _LOG.warning("Gene %s produced empty feature block; skipping", gene.gene_name)
+            continue
+
+        feature_blocks.append(features.astype(np.float32))
+        selected_genes.append(gene)
+        feature_names.extend([f"{gene.gene_name}|{bn}" for bn in bin_names])
+        block_slices.append((offset, offset + features.shape[1]))
+        offset += features.shape[1]
+
+    if not selected_genes:
+        raise ValueError("No genes produced usable feature blocks for inference")
+    if not feature_blocks:
+        raise ValueError("No feature blocks constructed for inference")
+
+    X = _safe_concat(feature_blocks, axis=1)
+
+    return CellwiseDataset(
+        genes=selected_genes,
+        X=X,
+        y=np.empty((X.shape[0], 0), dtype=np.float32),
         cell_ids=cell_ids,
         feature_names=feature_names,
         group_labels=group_labels,

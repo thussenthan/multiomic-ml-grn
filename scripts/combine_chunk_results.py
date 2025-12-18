@@ -16,7 +16,6 @@ and optionally concatenates `predictions_raw.csv`. Combined artifacts are writte
 to `output-root/RUN_NAME_MODEL` mirroring non-chunked runs.
 """
 
-from __future__ import annotations
 
 import argparse
 import json

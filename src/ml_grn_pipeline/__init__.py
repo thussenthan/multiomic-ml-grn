@@ -1,17 +1,14 @@
 """Gene regulatory network regression pipeline."""
 
-try:  # pragma: no cover - support running without package install
-    from .config import PipelineConfig, PathsConfig, TrainingConfig, ModelConfig
-except ImportError:  # pragma: no cover
-    from config import PipelineConfig, PathsConfig, TrainingConfig, ModelConfig  # type: ignore[no-redef]
+from .config import PipelineConfig, PathsConfig, TrainingConfig, ModelConfig
+
 
 def main(*args, **kwargs):  # pragma: no cover - thin wrapper for CLI entrypoint
-    try:
-        from .cli import main as _cli_main
-    except ImportError:  # pragma: no cover - fallback when executed as flat scripts
-        from cli import main as _cli_main  # type: ignore[attr-defined]
+    # Lazy import avoids double-import warnings when running `python -m ml_grn_pipeline.cli`.
+    from .cli import main as _cli_main
 
     return _cli_main(*args, **kwargs)
+
 
 __all__ = [
     "PipelineConfig",

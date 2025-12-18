@@ -13,11 +13,12 @@ End-to-end machine-learning framework for training and evaluating multi-omics in
 - Support reproducible batch execution via Slurm with detailed logging and chunk-aware job arrays.
 
 - **Modal-specific normalization:**
-  - ATAC matrices are reindexed to match RNA cell order; by default they are converted to counts-per-million (`counts_per_million` layer), with other transforms (e.g., TF–IDF) available via the `atac_layer` setting.
+  - ATAC matrices are reindexed to match RNA cell order; by default they are TF–IDF transformed (`tfidf` layer), with alternatives (`counts_per_million`, `log1p_cpm`, or none) available via the `atac_layer` setting.
   - RNA counts are converted to counts-per-million and log-transformed (`log1p_cpm` layer), then scaled with `scanpy.pp.scale` using the same zero-centering guard. A guard prevents double log1p transforms when a normalized layer already exists.
   - Optional `StandardScaler`/`MinMaxScaler` may be applied on the feature and target side based on the run configuration.
-- **Pseudobulk aggregation:** configurable group-wise averaging (default 20 cells per group) with PCA-informed nearest-neighbour pooling to stabilize expression estimates.
-- **Group-aware splitting:** 70/15/15 train/val/test splits with `GroupShuffleSplit`, plus 5-fold cross-validation (grouped when enough labels are available).
+- **k-NN smoothing:** Each cell is smoothed by averaging with its k nearest neighbors (default k=19 for `smoothing_k=20`) using PCA-informed nearest-neighbor search to reduce sparsity while maintaining dataset size.
+- **Optional pseudobulk aggregation:** PCA-informed, group-aware pooling within each sample when `pseudobulk_group_size > 1`.
+- **Group-aware splitting:** 70/15/15 train/val/test splits with `GroupShuffleSplit` keyed by `group_key` (default `sample`; falls back to random when insufficient groups), plus 5-fold cross-validation using `GroupKFold` when possible.
 - **Model zoo:** CNN, RNN, LSTM, Transformer, Graph (implicit message passing), PyTorch MLP, Random Forest, Extra Trees, HistGradientBoosting, XGBoost, CatBoost, SVR, Ridge, Elastic Net, Lasso, and OLS. Each model is defined in `ml_grn_pipeline.models` and accessible through the CLI.
 - **Unified diagnostics:** `analysis/grn_results_analysis.ipynb` replaces prior plotting scripts, generating per-gene Pearson summaries, violin plots, top-genes scatter plots, RMSE comparisons, prediction-vs-truth charts, and epoch history curves directly from run outputs.
 - **Batch execution:** `jobs/slurm_grn_cellwise_chunked.sbatch` targets CPU nodes, while `jobs/slurm_grn_cellwise_chunked_gpu.sbatch` allocates GPUs for deep models; both expose environment variables for model selection, chunking, hyperparameter overrides, and manifests.
@@ -141,10 +142,11 @@ Each mapping to a display label is tracked in `scripts/model_name_lookup.tsv` an
 
 3. **Gene feature extraction:** For each gene, the pipeline sums ATAC counts within ±10 kb windows, binned at 500 bp. Feature matrices are built on demand for each execution.
 4. **Expression filtering:** Genes must have at least `min_cells_per_gene` cells above `min_expression` (defaults: 100 cells, 0.0 expression).
-5. **Pseudobulk aggregation:** Separate PCA embeddings per split guide nearest-neighbour grouping inside each sample, producing meta-cells sized by `pseudobulk_group_size` (default 20).
-6. **Scaling:** Feature scalers run on the training split; target scaling is skipped automatically when expression values are already log-transformed (set `force_target_scaling=True` to override).
-7. **Splitting:** Train/val/test fractions default to 0.70/0.15/0.15 with group-aware splitting when sample labels exist (`group_key='sample'`).
-8. **Cross-validation:** Within the training split, models run 5-fold CV (grouped when possible) before fitting on the full training set.
+5. **k-NN smoothing:** Each cell is smoothed by averaging with its k nearest neighbors (k = `smoothing_k - 1`, default 19) using PCA-informed neighbor search within each split to reduce sparsity while maintaining dataset size.
+6. **Pseudobulk (optional):** If `pseudobulk_group_size > 1`, PCA-guided, group-aware pooling within each `group_key` (default `sample`) produces meta-cells of the requested size.
+7. **Scaling:** Feature scalers run on the training split; target scaling is skipped automatically when expression values are already log-transformed (set `force_target_scaling=True` to override).
+8. **Splitting:** Train/val/test fractions default to 0.70/0.15/0.15 with `GroupShuffleSplit` by `group_key` (fallback to random splits when too few groups).
+9. **Cross-validation:** Within the training split, models run 5-fold CV grouped by `group_key` when possible (else shuffled KFold) before fitting on the full training set.
 
 ### Future Directions
 

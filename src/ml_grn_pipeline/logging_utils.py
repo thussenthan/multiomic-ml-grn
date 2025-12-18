@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import csv
 import logging
@@ -122,7 +121,6 @@ class ResourceUsageTracker:
         if not self._enabled or self._process is None:
             self._log.debug("ResourceUsageTracker disabled (psutil unavailable)")
             return self
-        self._output_dir.mkdir(parents=True, exist_ok=True)
         self._start_time = time.time()
         try:
             self._process.cpu_percent(interval=None)
@@ -205,6 +203,7 @@ class ResourceUsageTracker:
         )
 
     def _write_csv(self) -> None:
+        self._output_dir.mkdir(parents=True, exist_ok=True)
         path = self._output_dir / f"{self._safe_name}_resource_usage.csv"
         try:
             with path.open("w", newline="") as handle:
@@ -266,6 +265,7 @@ class ResourceUsageTracker:
         ax_left.set_title(f"Resource usage | {self._name}")
         fig.tight_layout()
 
+        self._output_dir.mkdir(parents=True, exist_ok=True)
         path = self._output_dir / f"{self._safe_name}_resource_usage.png"
         try:
             fig.savefig(path, dpi=150)

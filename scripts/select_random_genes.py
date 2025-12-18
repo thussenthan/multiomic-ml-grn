@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Select a reproducible set of well-expressed genes for GRN modeling."""
 
-from __future__ import annotations
 
 import argparse
 from pathlib import Path

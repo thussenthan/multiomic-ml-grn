@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,13 +39,14 @@ class PathsConfig:
                 f"Could not locate '{filename}'. Looked in: {', '.join(searched)}"
             )
 
-        atac_path = _resolve(atac_filename, ["data/raw"])
-        rna_path = _resolve(rna_filename, ["data/raw"])
+        fallback_data_dirs = ["data/embryonic/processed", "data/raw"]
+        atac_path = _resolve(atac_filename, fallback_data_dirs)
+        rna_path = _resolve(rna_filename, fallback_data_dirs)
         gtf_path = _resolve(gtf_filename, ["data/reference"])
         output_root = (root / "output").resolve()
         output_dir = (output_root / "results").resolve()
         logs_dir = (output_root / "logs").resolve()
-        figures_dir = (output_root / "figs").resolve()
+        figures_dir = (root / "analysis" / "figs").resolve()
         return cls(root, atac_path, rna_path, gtf_path, output_dir, logs_dir, figures_dir)
 
 
@@ -71,8 +71,12 @@ class TrainingConfig:
     log1p_transform: bool = False
     target_scaler: Optional[str] = "standard"
     force_target_scaling: bool = False
-    pseudobulk_group_size: int = 20
+    enable_smoothing: bool = True
+    smoothing_k: int = 20
+    smoothing_pca_components: int = 10
+    pseudobulk_group_size: int = 1
     pseudobulk_pca_components: int = 10
+
     min_expression_fraction: float = 0.10
     rf_n_estimators: Optional[int] = None
     rf_max_depth: Optional[int] = None
@@ -82,7 +86,7 @@ class TrainingConfig:
     track_history: bool = True
     history_metrics: List[str] = field(default_factory=lambda: ["mse", "pearson", "spearman"])
     group_key: Optional[str] = "sample"
-    atac_layer: Optional[str] = "counts_per_million"
+    atac_layer: Optional[str] = "tfidf"
     rna_expression_layer: Optional[str] = "log1p_cpm"
     resource_sample_seconds: float = 60.0
 
@@ -94,6 +98,10 @@ class TrainingConfig:
             raise ValueError("k_folds must be at least 2")
         if self.window_bp <= 0 or self.bin_size_bp <= 0:
             raise ValueError("window_bp and bin_size_bp must be positive")
+        if self.smoothing_k < 1:
+            raise ValueError("smoothing_k must be >= 1")
+        if self.smoothing_pca_components < 1:
+            raise ValueError("smoothing_pca_components must be >= 1")
         if self.pseudobulk_group_size < 1:
             raise ValueError("pseudobulk_group_size must be >= 1")
         if self.pseudobulk_pca_components < 1:
@@ -142,6 +150,7 @@ class PipelineConfig:
     # Default to cell-wise multi-output unless explicitly turned off
     multi_output: bool = True
     run_name: Optional[str] = None
+
 
     def ensure_directories(self) -> None:
         self.paths.output_dir.mkdir(parents=True, exist_ok=True)

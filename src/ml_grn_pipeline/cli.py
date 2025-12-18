@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import argparse
 import csv
@@ -19,6 +18,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=str(Path.cwd()),
         help="Project root directory (defaults to the current working directory)",
     )
+    parser.add_argument("--atac-path", help="Override ATAC AnnData path (h5ad)")
+    parser.add_argument("--rna-path", help="Override RNA AnnData path (h5ad)")
+    parser.add_argument("--gtf-path", help="Override GTF annotation path")
     parser.add_argument("--genes", nargs="*", help="Specific gene names to model")
     parser.add_argument("--gene-manifest", help="Path to newline-delimited list of gene names to model")
     parser.add_argument("--chromosomes", nargs="*", help="Limit processing to genes on specific chromosomes")
@@ -29,6 +31,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-fraction", type=float, help="Training fraction (default 0.7)")
     parser.add_argument("--val-fraction", type=float, help="Validation fraction (default 0.15)")
     parser.add_argument("--test-fraction", type=float, help="Test fraction (default 0.15)")
+    parser.add_argument(
+        "--group-key",
+        help="AnnData obs column to use for grouped splits (set to 'none' to disable grouped splitting)",
+    )
     parser.add_argument("--window-bp", type=int, help="Window around TSS in base pairs (default 10,000)")
     parser.add_argument("--bin-size-bp", type=int, help="Bin size in base pairs (default 500)")
     parser.add_argument("--scaler", choices=["standard", "minmax", "none"], help="Feature scaler")
@@ -44,7 +50,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pseudobulk-group-size",
         type=int,
-        help="Cells per pseudobulk group; use 1 to disable pooling",
+        help="Cells per pseudobulk group (pools/averages cells, reducing dataset size); use 1 to disable pooling",
     )
     parser.add_argument(
         "--pseudobulk-pca-components",
@@ -54,7 +60,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--disable-pseudobulk",
         action="store_true",
-        help="Disable pseudobulk averaging (equivalent to --pseudobulk-group-size 1)",
+        help="Disable pseudobulk pooling (equivalent to --pseudobulk-group-size 1)",
+    )
+    parser.add_argument(
+        "--smoothing-k",
+        type=int,
+        help="Neighborhood size for k-NN smoothing (>=1). Use 1 to disable smoothing.",
+    )
+    parser.add_argument(
+        "--smoothing-pca-components",
+        type=int,
+        help="PCA components for k-NN smoothing neighborhoods",
+    )
+    parser.add_argument(
+        "--disable-smoothing",
+        action="store_true",
+        help="Disable k-NN smoothing of cells",
     )
     parser.add_argument(
         "--resource-sample-seconds",
@@ -63,8 +84,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--atac-layer",
-        choices=["counts_per_million", "tfidf", "none"],
-        help="ATAC normalization layer (default counts_per_million)",
+        choices=["counts_per_million", "tfidf", "log1p_cpm", "none"],
+        help="ATAC normalization layer (default tfidf)",
     )
     parser.add_argument(
         "--device",
@@ -80,6 +101,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--per-gene",
         action="store_true",
         help="Run per-gene training (one model per gene) instead of the default cell-wise multi-output mode",
+    )
+    parser.add_argument(
+        "--multi-output",
+        action="store_true",
+        help="Explicitly enable cell-wise multi-output mode (default unless --per-gene is set)",
     )
     parser.add_argument("--rf-n-estimators", type=int, help="Number of trees for random forest models")
     parser.add_argument("--rf-max-depth", type=int, help="Maximum depth for random forest models")
@@ -111,6 +137,19 @@ def main(argv: Optional[list[str]] = None) -> None:
         config = _config_from_json(payload)
     else:
         paths = PathsConfig.from_base(args.base_dir)
+
+        def _override_path(current: Path, override: Optional[str], label: str) -> Path:
+            if not override:
+                return current
+            candidate = Path(override).expanduser().resolve()
+            if not candidate.exists():
+                parser.error(f"{label} not found at {candidate}")
+            return candidate
+
+        paths.atac_path = _override_path(paths.atac_path, args.atac_path, "ATAC path")
+        paths.rna_path = _override_path(paths.rna_path, args.rna_path, "RNA path")
+        paths.gtf_path = _override_path(paths.gtf_path, args.gtf_path, "GTF path")
+
         training = TrainingConfig()
         if args.k_folds:
             training.k_folds = args.k_folds
@@ -130,17 +169,25 @@ def main(argv: Optional[list[str]] = None) -> None:
             training.target_scaler = None if args.target_scaler == "none" else args.target_scaler
         if args.force_target_scaling:
             training.force_target_scaling = True
+        if args.group_key is not None:
+            training.group_key = None if args.group_key.lower() == "none" else args.group_key
         if args.epochs:
             training.epochs = args.epochs
         if args.learning_rate:
             training.learning_rate = args.learning_rate
         if args.batch_size:
             training.batch_size = args.batch_size
-        if args.pseudobulk_group_size:
+        if args.smoothing_k is not None:
+            training.smoothing_k = args.smoothing_k
+        if args.smoothing_pca_components is not None:
+            training.smoothing_pca_components = args.smoothing_pca_components
+        if args.disable_smoothing:
+            training.enable_smoothing = False
+        if args.pseudobulk_group_size is not None:
             training.pseudobulk_group_size = args.pseudobulk_group_size
         if args.disable_pseudobulk:
             training.pseudobulk_group_size = 1
-        if args.pseudobulk_pca_components:
+        if args.pseudobulk_pca_components is not None:
             training.pseudobulk_pca_components = args.pseudobulk_pca_components
         if args.resource_sample_seconds is not None:
             training.resource_sample_seconds = args.resource_sample_seconds
@@ -168,6 +215,15 @@ def main(argv: Optional[list[str]] = None) -> None:
         if args.extra_models:
             models.extra_models = args.extra_models
 
+        if args.multi_output and args.per_gene:
+            parser.error("Cannot set both --multi-output and --per-gene")
+
+        multi_output_mode = True
+        if args.per_gene:
+            multi_output_mode = False
+        elif args.multi_output:
+            multi_output_mode = True
+
         gene_list: Optional[list[str]] = list(args.genes) if args.genes else None
         if args.gene_manifest:
             manifest_path = Path(args.gene_manifest).expanduser().resolve()
@@ -187,7 +243,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             max_genes=args.max_genes,
             chunk_total=args.chunk_total,
             chunk_index=args.chunk_index,
-            multi_output=not args.per_gene,
+            multi_output=multi_output_mode,
         )
 
     run_name = args.run_name or f"grn_regression_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -265,9 +321,10 @@ def _load_manifest_genes(manifest_path: Path) -> list[str]:
                 value = row[gene_col].strip()
                 if value:
                     genes.append(value)
-        return genes
+        unique_ordered = list(dict.fromkeys(genes))
+        return unique_ordered
 
-    return stripped
+    return list(dict.fromkeys(stripped))
 
 
 if __name__ == "__main__":

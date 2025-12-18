@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Sequence
@@ -282,6 +281,39 @@ def plot_correlation_boxplot(
 
     sns.boxplot(y=arr, color="#4C72B0", orient="v", ax=ax)
     sns.stripplot(y=arr, orient="v", color="#1f77b4", alpha=0.7, size=4, jitter=0.15, ax=ax)
+    ax.set_ylabel(metric_label)
+    ax.set_xticks([])
+    ax.set_title(title)
+    if save_and_close:
+        plt.tight_layout()
+        plt.savefig(output_path)
+        plt.close()
+
+
+def plot_correlation_violin(
+    values: Sequence[float],
+    output_path: Path,
+    title: str,
+    metric_label: str,
+    axes: plt.Axes | None = None,
+) -> None:
+    arr = np.asarray(values, dtype=np.float64)
+    mask = np.isfinite(arr)
+    arr = arr[mask]
+    if arr.size == 0:
+        return
+
+    if axes is None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.figure(figsize=(6.5, 4.0))
+        ax = plt.gca()
+        save_and_close = True
+    else:
+        ax = axes
+        save_and_close = False
+
+    sns.violinplot(y=arr, color="#A6CEE3", inner="quartile", cut=0, linewidth=1.1, ax=ax)
+    sns.stripplot(y=arr, orient="v", color="#1f77b4", alpha=0.45, size=3.5, jitter=0.18, ax=ax)
     ax.set_ylabel(metric_label)
     ax.set_xticks([])
     ax.set_title(title)

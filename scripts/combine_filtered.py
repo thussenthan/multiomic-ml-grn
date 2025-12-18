@@ -12,7 +12,6 @@ The script attempts to be conservative about schema mismatches by aligning
 features via an outer join and filling missing entries with zeros.
 """
 
-from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List, Tuple

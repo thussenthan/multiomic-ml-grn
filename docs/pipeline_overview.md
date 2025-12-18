@@ -4,9 +4,9 @@ This document summarizes the current end-to-end workflow for the single-cell gen
 
 ## 1. Data Sources and Configuration
 
-- **AnnData inputs:** `combined_ATAC_qc.h5ad` and `combined_RNA_qc.h5ad` (stored in `data/raw/`) are loaded through `PathsConfig.from_base(...)`. Cell barcodes are aligned so paired ATAC/RNA observations remain synchronized.
+- **AnnData inputs:** `combined_ATAC_qc.h5ad` and `combined_RNA_qc.h5ad` (stored in `data/embryonic/processed/`) are loaded through `PathsConfig.from_base(...)`. Cell barcodes are aligned so paired ATAC/RNA observations remain synchronized. Upstream preprocessing (e.g., removing CRISPR KO cells) should be completed before running the pipeline; no in-pipeline filtering is applied.
 - **Reference annotations:** The GTF specified in `config.PathsConfig` (defaults to `data/reference/GCF_000001635.27_genomic.gtf`) provides TSS coordinates used in feature extraction.
-- **Training configuration:** `TrainingConfig` centralizes hyperparameters such as window size (±10 kb), bin size (500 bp), pseudobulk settings (20-cell groups, 10 PCA components), split ratios (70/15/15), history tracking, and group keys. Each CLI run receives a `run_name` so all outputs land in a dedicated directory.
+- **Training configuration:** `TrainingConfig` centralizes hyperparameters such as window size (±10 kb), bin size (500 bp), k-NN smoothing settings (k=20, 10 PCA components), grouped splitting via `group_key` (default: `sample`), split ratios (70/15/15), and history tracking. Each CLI run receives a `run_name` so all outputs land in a dedicated directory.
 - **Chromosome filters:** Genome-wide is the default; pass `--chromosomes` (or set `config.chromosomes`) to restrict to specific contigs.
 - **Gene manifests:** Runs optionally accept a newline-delimited manifest (`--gene-manifest`). When present, every model consumes the same ordered gene list; otherwise genes can be filtered by chromosome or count thresholds at runtime.
 
@@ -24,13 +24,13 @@ This document summarizes the current end-to-end workflow for the single-cell gen
   - RNA counts are converted to log1p CPM (`rna_expression_layer="log1p_cpm"`) unless a precomputed layer already exists and are then standardized with `scanpy.pp.scale` using the same sparse-aware settings.
 - **Optional scalers:** Standard or MinMax scaling can be applied to features and/or targets depending on `TrainingConfig`.
 
-## 4. Pseudobulk Aggregation
+## 4. k-NN Smoothing
 
-To stabilize expression estimates we create pseudobulk observations per split:
+To reduce sparsity while maintaining dataset size, each cell is smoothed by averaging with its k nearest neighbors:
 
 1. Compute a PCA embedding (default 10 components) within each split.
-2. For every cell, select same-sample neighbours via `NearestNeighbors` and form groups of up to 20 cells.
-3. Average features/targets inside each group; group labels and synthetic cell IDs (e.g., `train_bulk_00001`) are stored to maintain group-aware splits.
+2. For every cell, find its k nearest neighbors (k = `smoothing_k - 1`, default 19) using `NearestNeighbors` on the PCA embedding.
+3. Average the cell's features/targets with its neighbors' data to create a smoothed version. The same number of cells is returned (no reduction in dataset size).
 
 ## 5. Model Suite
 
@@ -45,8 +45,8 @@ Multi-output training (predicting all genes simultaneously) is the default; use 
 
 ## 6. Training, Evaluation & Metrics
 
-- **Splits:** 70% train, 15% validation, 15% test, with `GroupShuffleSplit` maintaining sample coherence when a `group_key` is provided.
-- **Cross-validation:** 5-fold CV (grouped when enough unique labels exist) precedes final model fitting.
+- **Splits:** 70% train, 15% validation, 15% test. Grouped splits are used when `group_key` is set (default: `sample`); otherwise the pipeline falls back to random splits.
+- **Cross-validation:** 5-fold CV precedes final model fitting (grouped when enough unique groups exist, otherwise shuffled KFold).
 - **Metrics:** MSE, RMSE, MAE, R², Spearman, and Pearson are recorded per split; per-fold CV metrics are also stored.
 - **History tracking:** Torch models optionally log per-epoch loss and correlation metrics for train/validation splits.
 

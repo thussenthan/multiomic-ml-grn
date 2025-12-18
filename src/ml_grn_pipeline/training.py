@@ -1,6 +1,4 @@
-from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
@@ -9,6 +7,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import contextlib
 
 import numpy as np
 import torch
@@ -19,11 +19,6 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
-
-try:  # torch.amp compatibility varies by version
-    from torch.cuda import amp as _cuda_amp  # type: ignore[attr-defined]
-except ImportError:  # pragma: no cover - CPU-only environments
-    _cuda_amp = None
 
 from .config import TrainingConfig
 from .metrics import regression_metrics
@@ -36,9 +31,14 @@ try:  # psutil is optional; best-effort resource visibility
 except ImportError:  # pragma: no cover - optional dependency
     psutil = None
 
+try:  # torch.amp compatibility varies by version/installation
+    from torch.cuda import amp as _cuda_amp  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - CPU-only environments
+    _cuda_amp = None
+
 
 class _NoopGradScaler:
-    """Minimal stand-in when AMP is disabled."""
+    """Minimal stand-in when AMP is disabled or unavailable."""
 
     def scale(self, loss: torch.Tensor) -> torch.Tensor:
         return loss
@@ -82,6 +82,13 @@ def _amp_autocast(device_type: str, use_amp: bool):
     if _AMP_BACKEND == "torch.amp":
         return _AMP_AUTOCAST(device_type=device_type, enabled=True)
     return _AMP_AUTOCAST(enabled=True)
+
+
+def _reshape_tensor_for_model(tens: torch.Tensor, reshape: str | None) -> torch.Tensor:
+    """Utility to reshape tensor for model input, shared between training and prediction."""
+    if reshape == "sequence":
+        return tens.reshape(tens.shape[0], -1, 1)
+    return tens
 
 _LOG = get_logger(__name__)
 
@@ -129,6 +136,9 @@ def _config_cache_key(config: TrainingConfig, scope: str) -> str:
         "test_fraction": config.test_fraction,
         "random_state": config.random_state,
         "group_key": config.group_key,
+        "enable_smoothing": config.enable_smoothing,
+        "smoothing_k": config.smoothing_k,
+        "smoothing_pca_components": config.smoothing_pca_components,
         "pseudobulk_group_size": config.pseudobulk_group_size,
         "pseudobulk_pca_components": config.pseudobulk_pca_components,
         "scaler": config.scaler or "none",
@@ -229,15 +239,30 @@ class CellwiseModelResult:
     feature_names: Optional[List[str]] = None
     feature_importance_method: Optional[str] = None
     feature_block_slices: Optional[List[Tuple[int, int]]] = None
+    feature_scaler: Optional[StandardScaler | MinMaxScaler] = None
+    target_scaler: Optional[StandardScaler | MinMaxScaler] = None
+    reshape: Optional[str] = None
 
 
 def prepare_data(dataset, config: TrainingConfig) -> PreparedData:
-    _LOG.info(
-        "Preparing gene-wise data | samples=%d | features=%d",
-        dataset.X.shape[0],
-        dataset.X.shape[1],
-    )
+    cache_key = _config_cache_key(config, "gene")
+    cache_dict = dataset.prepared_cache
+
+    if cache_key in cache_dict:
+        return cache_dict[cache_key]  # type: ignore[return-value]
+
+    _seed_everything(config.random_state)
+
     _log_resource_snapshot("prepare_data:start")
+    # Use genes[0].gene_name if available, else fallback to 'unknown'.
+    if hasattr(dataset, "genes") and dataset.genes and hasattr(dataset.genes[0], "gene_name"):
+        gene_name = dataset.genes[0].gene_name
+    else:
+        try:
+            gene_name = dataset.gene.gene_name
+        except Exception:
+            gene_name = "unknown"
+    _LOG.info("Preparing dataset for gene %s with %d cells", gene_name, dataset.num_cells())
 
     X = dataset.X.astype(np.float32)
     y = dataset.y.astype(np.float32)
@@ -249,6 +274,14 @@ def prepare_data(dataset, config: TrainingConfig) -> PreparedData:
         groups = np.asarray(groups)
 
     use_group_split = bool(config.group_key)
+    if use_group_split:
+        unique_groups = np.unique(groups)
+        if unique_groups.size < 2:
+            _LOG.warning(
+                "Grouped splitting requested but only %d unique groups found; falling back to random split",
+                unique_groups.size,
+            )
+            use_group_split = False
     rng_state = config.random_state
 
     if use_group_split:
@@ -290,16 +323,14 @@ def prepare_data(dataset, config: TrainingConfig) -> PreparedData:
             _LOG.warning("Falling back to random train/val split due to insufficient groups")
             use_group_split = False
         else:
-            train_idx = train_idx_rel
-            val_idx = val_idx_rel
-            X_train = X_temp[train_idx]
-            y_train = y_temp[train_idx]
-            cell_train = cell_temp[train_idx]
-            group_train = group_temp[train_idx]
-            X_val = X_temp[val_idx]
-            y_val = y_temp[val_idx]
-            cell_val = cell_temp[val_idx]
-            group_val = group_temp[val_idx]
+            X_train = X_temp[train_idx_rel]
+            y_train = y_temp[train_idx_rel]
+            cell_train = cell_temp[train_idx_rel]
+            group_train = group_temp[train_idx_rel]
+            X_val = X_temp[val_idx_rel]
+            y_val = y_temp[val_idx_rel]
+            cell_val = cell_temp[val_idx_rel]
+            group_val = group_temp[val_idx_rel]
 
     if not use_group_split:
         X_train, X_val, y_train, y_val, cell_train, cell_val, group_train, group_val = train_test_split(
@@ -312,6 +343,35 @@ def prepare_data(dataset, config: TrainingConfig) -> PreparedData:
         )
         group_train = np.asarray(group_train)
         group_val = np.asarray(group_val)
+
+    if config.enable_smoothing and config.smoothing_k > 1:
+        X_train, y_train, cell_train = _apply_knn_smoothing(
+            X_train,
+            y_train,
+            cell_train,
+            group_size=config.smoothing_k,
+            n_components=config.smoothing_pca_components,
+            random_state=config.random_state,
+            split_label="train",
+        )
+        X_val, y_val, cell_val = _apply_knn_smoothing(
+            X_val,
+            y_val,
+            cell_val,
+            group_size=config.smoothing_k,
+            n_components=config.smoothing_pca_components,
+            random_state=config.random_state + 1,
+            split_label="val",
+        )
+        X_test, y_test, cell_test = _apply_knn_smoothing(
+            X_test,
+            y_test,
+            cell_test,
+            group_size=config.smoothing_k,
+            n_components=config.smoothing_pca_components,
+            random_state=config.random_state + 2,
+            split_label="test",
+        )
 
     X_train, y_train, cell_train, group_train = _apply_pseudobulk(
         X_train,
@@ -437,9 +497,17 @@ def prepare_cellwise_data(dataset, config: TrainingConfig) -> PreparedCellwiseDa
         groups = np.asarray(cells)
     else:
         groups = np.asarray(groups)
+    rng_state = config.random_state
 
     use_group_split = bool(config.group_key)
-    rng_state = config.random_state
+    if use_group_split:
+        unique_groups = np.unique(groups)
+        if unique_groups.size < 2:
+            _LOG.warning(
+                "Grouped splitting requested but only %d unique groups found; falling back to random split",
+                unique_groups.size,
+            )
+            use_group_split = False
 
     if use_group_split:
         splitter = GroupShuffleSplit(n_splits=1, test_size=config.test_fraction, random_state=rng_state)
@@ -500,6 +568,35 @@ def prepare_cellwise_data(dataset, config: TrainingConfig) -> PreparedCellwiseDa
         )
         group_train = np.asarray(group_train)
         group_val = np.asarray(group_val)
+
+    if config.enable_smoothing and config.smoothing_k > 1:
+        X_train, Y_train, cell_train = _apply_knn_smoothing(
+            X_train,
+            Y_train,
+            cell_train,
+            group_size=config.smoothing_k,
+            n_components=config.smoothing_pca_components,
+            random_state=config.random_state,
+            split_label="train",
+        )
+        X_val, Y_val, cell_val = _apply_knn_smoothing(
+            X_val,
+            Y_val,
+            cell_val,
+            group_size=config.smoothing_k,
+            n_components=config.smoothing_pca_components,
+            random_state=config.random_state + 1,
+            split_label="val",
+        )
+        X_test, Y_test, cell_test = _apply_knn_smoothing(
+            X_test,
+            Y_test,
+            cell_test,
+            group_size=config.smoothing_k,
+            n_components=config.smoothing_pca_components,
+            random_state=config.random_state + 2,
+            split_label="test",
+        )
 
     X_train, Y_train, cell_train, group_train = _apply_pseudobulk(
         X_train,
@@ -800,15 +897,31 @@ def _compute_torch_feature_importance(
     """Estimate global feature importance via mean absolute input gradients with permutation fallback."""
 
     X_ref = np.asarray(X_reference, dtype=np.float32)
+    y_ref = np.asarray(y_reference, dtype=np.float64) if y_reference is not None else None
+
+    # Validate that y_reference and X_reference are compatible before sampling
+    if y_ref is not None and X_ref.shape[0] != y_ref.shape[0]:
+        raise ValueError(f"Shape mismatch: X_reference has {X_ref.shape[0]} samples, y_reference has {y_ref.shape[0]} samples.")
+
     if X_ref.size == 0:
         return None
 
+
     sample_limit = max_samples if max_samples and max_samples > 0 else None
+
     if sample_limit is not None and X_ref.shape[0] > sample_limit:
         rng = np.random.default_rng(42)
         idx = rng.choice(X_ref.shape[0], size=sample_limit, replace=False)
         idx.sort()
         X_ref = X_ref[idx]
+        if y_ref is not None:
+            y_ref = y_ref[idx]
+
+    if y_ref is not None and y_ref.shape[0] != X_ref.shape[0]:
+        # Align reference targets with the sampled feature matrix to avoid shape mismatches downstream.
+        min_len = min(y_ref.shape[0], X_ref.shape[0])
+        X_ref = X_ref[:min_len]
+        y_ref = y_ref[:min_len]
 
     model = bundle.model.to(device)
     model.eval()
@@ -821,8 +934,7 @@ def _compute_torch_feature_importance(
         for start in range(0, X_ref.shape[0], batch_size):
             batch = X_ref[start : start + batch_size]
             tensor = torch.tensor(batch, device=device, dtype=torch.float32)
-            if bundle.reshape == "sequence":
-                tensor = tensor.reshape(tensor.shape[0], -1, 1)
+            tensor = _reshape_tensor_for_model(tensor, bundle.reshape)
             tensor.requires_grad_(True)
 
             model.zero_grad(set_to_none=True)
@@ -846,11 +958,11 @@ def _compute_torch_feature_importance(
     except Exception:
         grad_success = False
 
-    if not grad_success and y_reference is not None:
+    if not grad_success and y_ref is not None:
         return _compute_torch_permutation_importance(
             bundle,
             X_ref,
-            y_reference,
+            y_ref,
             device=device,
             target_scaler=target_scaler,
             max_samples=max_samples,
@@ -886,8 +998,7 @@ def _compute_torch_permutation_importance(
 
     def _predict_unscaled(inputs: np.ndarray) -> np.ndarray:
         tens = torch.tensor(inputs, device=device, dtype=torch.float32)
-        if bundle.reshape == "sequence":
-            tens = tens.reshape(tens.shape[0], -1, 1)
+        tens = _reshape_tensor_for_model(tens, bundle.reshape)
         with torch.no_grad():
             preds = bundle.model.to(device)(tens).cpu().numpy()
         return _unscale_targets(target_scaler, preds)
@@ -1147,6 +1258,9 @@ def train_multi_output_model(
         feature_names=getattr(dataset, "feature_names", None),
         feature_importance_method=feature_importance_method,
         feature_block_slices=getattr(dataset, "feature_block_slices", None),
+        feature_scaler=prepared.feature_scaler,
+        target_scaler=prepared.target_scaler,
+        reshape=model.reshape if isinstance(model, TorchModelBundle) else None,
     )
 
 
@@ -1449,6 +1563,80 @@ def _ensure_2d(values: np.ndarray) -> np.ndarray:
     return arr
 
 
+def _apply_knn_smoothing(
+    X: np.ndarray,
+    Y: np.ndarray,
+    cell_ids: np.ndarray,
+    *,
+    group_size: int,
+    n_components: int,
+    random_state: int,
+    split_label: str,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """k-NN smoothing: average each cell with its k-1 nearest neighbors (dataset size unchanged)."""
+    if X.size == 0:
+        return X, Y, cell_ids
+
+    n_cells = X.shape[0]
+    if group_size <= 1 or n_cells <= 1:
+        return X, Y, cell_ids
+
+    components = max(1, min(n_components, X.shape[1], n_cells))
+    if components < 1:
+        return X, Y, cell_ids
+
+    start_time = time.perf_counter()
+    _log_resource_snapshot(f"smoothing:{split_label}:start")
+
+    X_for_pca = X
+    if X.shape[0] > 1 and X.shape[1] > 0:
+        scaler = StandardScaler(with_mean=False)
+        try:
+            X_for_pca = scaler.fit_transform(X)
+        except Exception:  # pragma: no cover - fallback to raw values
+            X_for_pca = X
+    try:
+        pca = PCA(n_components=components, random_state=random_state)
+        embedding = pca.fit_transform(X_for_pca)
+    except Exception as exc:  # pragma: no cover - defensive
+        _LOG.warning("PCA failed for %s split (%s); skipping smoothing", split_label, exc)
+        return X, Y, cell_ids
+
+    k_neighbors = min(group_size - 1, n_cells - 1)
+    nn = NearestNeighbors(n_neighbors=k_neighbors + 1, metric="euclidean")
+    nn.fit(embedding)
+    _, neighbor_indices = nn.kneighbors(embedding)
+
+    X_smoothed = np.zeros_like(X, dtype=np.float32)
+    y_is_vector = Y.ndim == 1
+    Y_smoothed = np.zeros_like(Y, dtype=np.float32)
+
+    def _smooth_y_row(Y, neighbor_set, y_is_vector):
+        arr = np.asarray(Y[neighbor_set], dtype=np.float64)
+        if y_is_vector:
+            return arr.mean().astype(np.float32)
+        else:
+            return arr.mean(axis=0).astype(np.float32)
+
+    for i in range(n_cells):
+        neighbor_set = neighbor_indices[i, : k_neighbors + 1]  # include the cell itself
+        X_smoothed[i] = np.asarray(X[neighbor_set], dtype=np.float64).mean(axis=0).astype(np.float32)
+        Y_smoothed[i] = _smooth_y_row(Y, neighbor_set, y_is_vector)
+
+    elapsed = time.perf_counter() - start_time
+    _LOG.info(
+        "Smoothing applied to %s split: %d cells (k=%d | components=%d | %.2fs)",
+        split_label,
+        n_cells,
+        k_neighbors,
+        components,
+        elapsed,
+    )
+    _log_resource_snapshot(f"smoothing:{split_label}:end")
+
+    return X_smoothed, Y_smoothed, cell_ids
+
+
 def _apply_pseudobulk(
     X: np.ndarray,
     Y: np.ndarray,
@@ -1481,7 +1669,8 @@ def _apply_pseudobulk(
         scaler = StandardScaler(with_mean=False)
         try:
             X_for_pca = scaler.fit_transform(X)
-        except Exception:  # pragma: no cover - fallback to raw values
+        except Exception as exc:  # pragma: no cover - defensive
+            _LOG.warning("PCA preprocessing failed for %s split (%s); using raw features", split_label, exc)
             X_for_pca = X
     try:
         pca = PCA(n_components=components, random_state=random_state)

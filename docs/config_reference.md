@@ -69,8 +69,11 @@ Values below come from `TrainingConfig` and apply unless overridden via CLI or J
 | `log1p_transform`           | `False`                        | Additional log1p on targets if raw layer selected.                         |
 | `target_scaler`             | `standard`                     | Target scaling (set `none` to disable).                                    |
 | `force_target_scaling`      | `False`                        | Apply target scaling even when targets are already log-transformed.        |
-| `pseudobulk_group_size`     | `20`                           | Cells per pseudobulk group.                                                |
-| `pseudobulk_pca_components` | `10`                           | PCA dims for grouping.                                                     |
+| `enable_smoothing`          | `True`                         | Whether to apply k-NN smoothing within each split.                         |
+| `smoothing_k`               | `20`                           | Neighborhood size for smoothing (use 1 to disable).                        |
+| `smoothing_pca_components`  | `10`                           | PCA components for smoothing neighbor search.                              |
+| `pseudobulk_group_size`     | `1`                            | Cells per pseudobulk aggregate (1 disables pooling).                       |
+| `pseudobulk_pca_components` | `10`                           | PCA dims for pseudobulk neighborhood search.                               |
 | `min_expression_fraction`   | `0.10`                         | Fraction of cells expressing a gene for multi-output sampling.             |
 | `rf_n_estimators`           | `None`                         | Falls back to model defaults below.                                        |
 | `rf_max_depth`              | `None`                         | Unlimited depth when unset.                                                |
@@ -79,7 +82,7 @@ Values below come from `TrainingConfig` and apply unless overridden via CLI or J
 | `rf_bootstrap`              | `None`                         | Model default when unset.                                                  |
 | `track_history`             | `True`                         | Record training curves.                                                    |
 | `history_metrics`           | `['mse','pearson','spearman']` | Metrics tracked per epoch.                                                 |
-| `group_key`                 | `'sample'`                     | Group label in AnnData `obs` for splits.                                   |
+| `group_key`                 | `'sample'`                     | obs column used to group splits and CV folds.                              |
 | `atac_layer`                | `'counts_per_million'`         | ATAC normalization layer (`counts_per_million`, `tfidf`, etc., or `None`). |
 | `rna_expression_layer`      | `'log1p_cpm'`                  | RNA normalization layer.                                                   |
 
@@ -89,12 +92,14 @@ Values below come from `TrainingConfig` and apply unless overridden via CLI or J
 
 | Path Attribute | Default Location                              |
 | -------------- | --------------------------------------------- |
-| `atac_path`    | `data/raw/combined_ATAC_qc.h5ad`              |
-| `rna_path`     | `data/raw/combined_RNA_qc.h5ad`               |
+| `atac_path`    | `data/embryonic/processed/combined_ATAC_qc.h5ad` |
+| `rna_path`     | `data/embryonic/processed/combined_RNA_qc.h5ad`  |
 | `gtf_path`     | `data/reference/GCF_000001635.27_genomic.gtf` |
 | `output_dir`   | `output/results`                              |
 | `logs_dir`     | `output/logs`                                 |
 | `figures_dir`  | `analysis/figs`                               |
+
+Override paths via CLI flags (`--atac-path`, `--rna-path`, `--gtf-path`) or by supplying a custom JSON config to the pipeline.
 
 ## Model Defaults
 

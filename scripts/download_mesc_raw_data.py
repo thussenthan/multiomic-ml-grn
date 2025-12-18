@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Download raw MESC multi-omics files listed in the original Slurm script."""
 
-from __future__ import annotations
 
 import argparse
 import shutil

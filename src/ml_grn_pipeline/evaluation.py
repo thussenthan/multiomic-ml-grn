@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import json
 import logging
@@ -19,12 +18,16 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 import matplotlib.pyplot as plt
+import seaborn as sns
+import joblib
+import torch
 
-from .config import PipelineConfig
+from .config import PipelineConfig, TrainingConfig
 from .data import (
     GeneInfo,
     PeakIndexer,
     build_cellwise_dataset,
+    build_cellwise_features_only,
     build_gene_dataset,
     filter_atac_by_genes,
     load_datasets,
@@ -34,9 +37,11 @@ from .data import (
 )
 from .logging_utils import ResourceUsageTracker, get_logger
 from .training import CellwiseModelResult, ModelResult, train_model_for_gene, train_multi_output_model
+from . import predict
 from .visualization import (
     plot_feature_importance,
     plot_correlation_boxplot,
+    plot_correlation_violin,
     plot_predictions_vs_actual,
     plot_residual_barplot,
     plot_residual_histogram,
@@ -218,12 +223,15 @@ def _export_feature_importance_artifacts(
                 distances = pd.to_numeric(block["distance_to_tss_kb"], errors="coerce")
                 mask = np.isfinite(distances) & np.isfinite(block["importance_mean"])
                 if mask.any():
-                    record["pearson_distance_corr"] = float(
-                        block.loc[mask, "importance_mean"].corr(distances[mask], method="pearson")
-                    )
-                    record["spearman_distance_corr"] = float(
-                        block.loc[mask, "importance_mean"].corr(distances[mask], method="spearman")
-                    )
+                    imp = block.loc[mask, "importance_mean"]
+                    dist = distances[mask]
+                    if imp.nunique() > 1 and dist.nunique() > 1:
+                        record["pearson_distance_corr"] = float(
+                            imp.corr(dist, method="pearson")
+                        )
+                        record["spearman_distance_corr"] = float(
+                            imp.corr(dist, method="spearman")
+                        )
                     top_idx = block.loc[mask, "importance_mean"].idxmax()
                     record["top_feature_distance_kb"] = float(distances.loc[top_idx])
             per_gene_records.append(record)
@@ -268,36 +276,39 @@ def _export_feature_importance_artifacts(
         distances = pd.to_numeric(aggregate_df["distance_to_tss_kb"], errors="coerce")
         mask = np.isfinite(distances) & np.isfinite(fi_mean)
         if mask.any():
-            pearson = float(pd.Series(fi_mean[mask]).corr(distances[mask], method="pearson"))
-            spearman = float(pd.Series(fi_mean[mask]).corr(distances[mask], method="spearman"))
-            corr_payload = {
-                "pearson": pearson,
-                "spearman": spearman,
-                "count": int(mask.sum()),
-                "method": method or "unknown",
-            }
-            summary_payload["tss_correlation"] = corr_payload
-            scatter_path = output_dir / "feature_importance_vs_tss_distance.png"
-            plot_importance_distance_scatter(
-                fi_mean[mask],
-                distances[mask],
-                scatter_path,
-                f"FI vs TSS distance | {model_name.upper()}",
-                annotation={"Spearman": spearman, "Pearson": pearson},
-            )
-            corr_path = output_dir / "feature_importance_tss_correlation.json"
-            corr_path.write_text(json.dumps(corr_payload, indent=2))
-            _LOG.info(
-                "Saved FI vs TSS scatter and correlation stats (n=%d) to %s and %s",
-                mask.sum(),
-                scatter_path,
-                corr_path,
-            )
+            imp = pd.Series(fi_mean[mask])
+            dist = distances[mask]
+            if imp.nunique() > 1 and pd.Series(dist).nunique() > 1:
+                pearson = float(imp.corr(dist, method="pearson"))
+                spearman = float(imp.corr(dist, method="spearman"))
+                corr_payload = {
+                    "pearson": pearson,
+                    "spearman": spearman,
+                    "count": int(mask.sum()),
+                    "method": method or "unknown",
+                }
+                summary_payload["tss_correlation"] = corr_payload
+                scatter_path = output_dir / "feature_importance_vs_tss_distance.png"
+                plot_importance_distance_scatter(
+                    fi_mean[mask],
+                    dist,
+                    scatter_path,
+                    f"FI vs TSS distance | {model_name.upper()}",
+                    annotation={"Spearman": spearman, "Pearson": pearson},
+                )
+                corr_path = output_dir / "feature_importance_tss_correlation.json"
+                corr_path.write_text(json.dumps(corr_payload, indent=2))
+                _LOG.info(
+                    "Saved FI vs TSS scatter and correlation stats (n=%d) to %s and %s",
+                    mask.sum(),
+                    scatter_path,
+                    corr_path,
+                )
 
             overlay_path = output_dir / "feature_importance_distance_overview.png"
             plot_cumulative_importance_overlay(
                 fi_mean[mask],
-                distances[mask],
+                dist,
                 overlay_path,
                 f"FI cumulative distance profile | {model_name.upper()}",
             )
@@ -320,9 +331,6 @@ try:
     import torch.nn as _torch_nn
 except ImportError:  # pragma: no cover - torch optional during some tests
     _torch_nn = None
-
-SELECTED_GENE_COUNT = 5000
-
 
 def run_pipeline(config: PipelineConfig) -> Path:
     config.ensure_directories()
@@ -417,47 +425,57 @@ def run_pipeline(config: PipelineConfig) -> Path:
                 config.training.min_expression_fraction * 100.0,
             )
         else:
-            requested_gene_count = config.max_genes or SELECTED_GENE_COUNT
-            if requested_gene_count <= 0:
-                raise RuntimeError("Configured max_genes must be >= 1 for multi-output mode")
-
             available_gene_count = len(expressed_candidates)
-            if available_gene_count < requested_gene_count and not config.max_genes:
-                _LOG.warning(
-                    "Only %d genes meet the expression threshold (requested %d); proceeding with available genes",
-                    available_gene_count,
-                    requested_gene_count,
+            if config.max_genes is None:
+                if available_gene_count == 0:
+                    raise RuntimeError(
+                        "No genes met the minimum expression fraction (>=%.2f of cells)"
+                        % config.training.min_expression_fraction
+                    )
+                genes = expressed_candidates
+                selected_gene_fractions = {
+                    gene.gene_name: fraction_map.get(gene.gene_name, float("nan"))
+                    for gene in genes
+                }
+                _LOG.info(
+                    "Using all %d genes meeting the >=%.1f%% expression threshold",
+                    len(genes),
+                    config.training.min_expression_fraction * 100.0,
                 )
+            else:
+                requested_gene_count = config.max_genes
+                if requested_gene_count <= 0:
+                    raise RuntimeError("Configured max_genes must be >= 1 for multi-output mode")
 
-            selected_gene_count = min(requested_gene_count, available_gene_count)
-            if selected_gene_count == 0:
-                raise RuntimeError(
-                    "No genes met the minimum expression fraction (>=%.2f of cells)"
-                    % config.training.min_expression_fraction
+                if available_gene_count < requested_gene_count:
+                    _LOG.warning(
+                        "Only %d genes meet the expression threshold (requested %d); proceeding with available genes",
+                        available_gene_count,
+                        requested_gene_count,
+                    )
+
+                selected_gene_count = min(requested_gene_count, available_gene_count)
+                if selected_gene_count == 0:
+                    raise RuntimeError(
+                        "No genes met the minimum expression fraction (>=%.2f of cells)"
+                        % config.training.min_expression_fraction
+                    )
+
+                genes = _choose_random_genes(
+                    expressed_candidates,
+                    selected_gene_count,
+                    config.training.random_state,
                 )
-
-            if available_gene_count < requested_gene_count and config.max_genes:
-                _LOG.warning(
-                    "Only %d genes meet the expression threshold (requested %d); proceeding with available genes",
-                    available_gene_count,
-                    requested_gene_count,
+                selected_gene_fractions = {
+                    gene.gene_name: fraction_map.get(gene.gene_name, float("nan"))
+                    for gene in genes
+                }
+                _LOG.info(
+                    "Selected %d genome-wide genes with >=%.1f%% expressing cells",
+                    len(genes),
+                    config.training.min_expression_fraction * 100.0,
                 )
-
-            genes = _choose_random_genes(
-                expressed_candidates,
-                selected_gene_count,
-                config.training.random_state,
-            )
-            selected_gene_fractions = {
-                gene.gene_name: fraction_map.get(gene.gene_name, float("nan"))
-                for gene in genes
-            }
-            _LOG.info(
-                "Selected %d genome-wide genes with >=%.1f%% expressing cells",
-                len(genes),
-                config.training.min_expression_fraction * 100.0,
-            )
-            _LOG.debug("Selected genes: %s", ", ".join(g.gene_name for g in genes))
+                _LOG.debug("Selected genes: %s", ", ".join(g.gene_name for g in genes))
 
     if config.multi_output and not genes:
         raise RuntimeError("No genes matched the provided filters for multi-output training")
@@ -519,7 +537,6 @@ def run_pipeline(config: PipelineConfig) -> Path:
 
     base_dir = config.paths.output_dir / "grn_regression"
     run_dir = base_dir / config.run_name if config.run_name else base_dir
-    run_dir.mkdir(parents=True, exist_ok=True)
 
     if not genes:
         _LOG.warning(
@@ -528,6 +545,8 @@ def run_pipeline(config: PipelineConfig) -> Path:
             chunk_total,
         )
         return run_dir
+
+    _ensure_directory(run_dir)
 
     summary_records: List[Dict[str, object]] = []
     model_store: Dict[str, Dict[str, object]] = defaultdict(lambda: {
@@ -796,7 +815,6 @@ def _run_cellwise_pipeline(
 ) -> Path:
     base_dir = config.paths.output_dir / "grn_regression_cellwise"
     run_dir = base_dir / config.run_name if config.run_name else base_dir
-    run_dir.mkdir(parents=True, exist_ok=True)
     catboost_tmp_root = run_dir / "catboost_tmp"
 
     model_export_meta: Dict[str, Dict[str, Any]] = {
@@ -827,8 +845,8 @@ def _run_cellwise_pipeline(
             _LOG.error("Failed to construct cell-wise dataset: %s", exc)
             raise
 
-        models_dir = run_dir / "models"
-        _ensure_directory(models_dir)
+        _ensure_directory(run_dir)
+        models_dir = _ensure_directory(run_dir / "models")
 
         _write_selected_genes(run_dir, dataset.genes, gene_expression_fraction)
 
@@ -906,6 +924,7 @@ def _run_cellwise_pipeline(
 
                 _write_cellwise_metrics(model_dir, result)
                 _plot_cellwise_diagnostics(model_dir, result)
+                _persist_cellwise_model(model_dir, result, config.training)
                 if result.history:
                     history_df = pd.DataFrame(result.history)
                     history_csv = model_dir / "training_history.csv"
@@ -987,23 +1006,56 @@ def _genes_expressed_above_fraction(
     var_names = np.asarray(rna.var_names).astype(str)
     name_to_idx = {name: idx for idx, name in enumerate(var_names)}
 
-    candidates: List[GeneInfo] = []
-    fractions: Dict[str, float] = {}
-
+    # Vectorized evaluation to avoid per-gene materialization of full columns
+    lookup: List[Tuple[GeneInfo, int]] = []
     for gene in genes:
         idx = name_to_idx.get(gene.gene_name)
-        if idx is None:
-            continue
-        column = rna.X[:, idx]
-        if sp.issparse(column):
-            values = column.toarray().ravel()
+        if idx is not None:
+            lookup.append((gene, idx))
+
+    if not lookup:
+        return [], {}
+
+    genes_present, indices = zip(*lookup)
+    indices_arr = np.fromiter(indices, dtype=np.int64)
+
+    _LOG.info(
+        "Evaluating expression fractions | genes=%d | cells=%d | min_expression=%.3f | min_fraction=%.3f",
+        len(indices_arr),
+        total_cells,
+        min_expression,
+        min_fraction,
+    )
+    start = time.perf_counter()
+
+    matrix = rna.X[:, indices_arr]
+    if sp.issparse(matrix):
+        matrix = matrix.tocsr()
+        if min_expression <= 0:
+            counts = np.asarray(matrix.getnnz(axis=0)).ravel()
         else:
-            values = np.asarray(column).ravel()
-        expressed = values >= min_expression
-        fraction = float(expressed.sum() / total_cells)
+            mask = matrix.data >= min_expression
+            counts = np.bincount(matrix.indices[mask], minlength=matrix.shape[1])
+    else:
+        arr = np.asarray(matrix)
+        counts = (arr >= min_expression).sum(axis=0)
+
+    fractions: Dict[str, float] = {}
+    candidates: List[GeneInfo] = []
+
+    for gene, count in zip(genes_present, counts):
+        fraction = float(count / total_cells)
         fractions[gene.gene_name] = fraction
         if fraction >= min_fraction:
             candidates.append(gene)
+
+    duration = time.perf_counter() - start
+    _LOG.info(
+        "Expression filtering complete | kept=%d/%d genes | duration=%.2fs",
+        len(candidates),
+        len(genes_present),
+        duration,
+    )
 
     return candidates, fractions
 
@@ -1015,7 +1067,8 @@ def _choose_random_genes(
 ) -> List[GeneInfo]:
     rng = np.random.default_rng(random_state)
     indices = rng.choice(len(genes), size=count, replace=False)
-    return [genes[int(i)] for i in indices]
+    sampled = [genes[int(i)] for i in indices]
+    return sampled
 
 
 def _ensure_directory(path: Path) -> Path:
@@ -1046,7 +1099,7 @@ def _write_selected_genes(
     out_path = run_dir / "selected_genes.csv"
     rows = ["gene_name,gene_id,chrom,expression_fraction"]
     expr_map = gene_expression_fraction or {}
-    for gene in sorted(genes, key=lambda g: g.gene_name):
+    for gene in sorted(genes, key=lambda g: (g.gene_name.lower(), g.gene_id.lower())):
         frac = expr_map.get(gene.gene_name, float("nan"))
         rows.append(f"{gene.gene_name},{gene.gene_id},{gene.chrom},{frac}")
     out_path.write_text("\n".join(rows) + "\n")
@@ -1126,18 +1179,111 @@ def _plot_cellwise_diagnostics(model_dir: Path, result: CellwiseModelResult) -> 
             f"Mean absolute residuals | {result.model_name.upper()} | {split}",
         )
 
+    def _collect_metric(per_gene: List[Dict[str, float]], key: str) -> List[float]:
+        values: List[float] = []
+        for entry in per_gene:
+            val = entry.get(key)
+            if val is None:
+                continue
+            try:
+                num = float(val)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(num):
+                values.append(num)
+        return values
+
+    spearman_by_split: Dict[str, List[float]] = {}
+    for split in ("train", "val", "test"):
+        per_gene = result.per_gene_metrics.get(split, [])
+        split_values = _collect_metric(per_gene, "spearman")
+        if not split_values:
+            continue
+        spearman_by_split[split] = split_values
+        title = f"{result.model_name.upper()} | {split.title()} | Spearman"
+        plot_correlation_boxplot(
+            split_values,
+            output_path=model_dir / f"spearman_boxplot_{split}.png",
+            title=title,
+            metric_label="Spearman correlation coefficient",
+        )
+        plot_correlation_violin(
+            split_values,
+            output_path=model_dir / f"spearman_violin_{split}.png",
+            title=title,
+            metric_label="Spearman correlation coefficient",
+        )
+
+    if spearman_by_split:
+        combined_records = [
+            {"split": split.title(), "spearman": val}
+            for split, values in spearman_by_split.items()
+            for val in values
+        ]
+        combined_df = pd.DataFrame(combined_records)
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharey=True)
+        sns.boxplot(
+            data=combined_df,
+            x="split",
+            y="spearman",
+            hue="split",
+            palette="Set2",
+            legend=False,
+            ax=axes[0],
+        )
+        sns.stripplot(
+            data=combined_df,
+            x="split",
+            y="spearman",
+            color="#2c3e50",
+            alpha=0.45,
+            size=3.5,
+            jitter=0.18,
+            ax=axes[0],
+        )
+        axes[0].set_title(f"{result.model_name.upper()} | Spearman Boxplots")
+        axes[0].set_xlabel("Data split")
+        axes[0].set_ylabel("Spearman correlation coefficient")
+
+        sns.violinplot(
+            data=combined_df,
+            x="split",
+            y="spearman",
+            hue="split",
+            palette="Set2",
+            inner="quartile",
+            cut=0,
+            legend=False,
+            ax=axes[1],
+        )
+        sns.stripplot(
+            data=combined_df,
+            x="split",
+            y="spearman",
+            color="#2c3e50",
+            alpha=0.4,
+            size=3,
+            jitter=0.16,
+            ax=axes[1],
+        )
+        axes[1].set_title(f"{result.model_name.upper()} | Spearman Violins")
+        axes[1].set_xlabel("Data split")
+        axes[1].set_ylabel("")
+
+        fig.tight_layout()
+        fig.savefig(model_dir / "spearman_by_split.png")
+        plt.close(fig)
+
     per_gene_val = result.per_gene_metrics.get("val", [])
     if per_gene_val:
-        pearson_vals = [entry.get("pearson") for entry in per_gene_val]
-        spearman_vals = [entry.get("spearman") for entry in per_gene_val]
-        valid_pearson = [val for val in pearson_vals if val is not None]
-        valid_spearman = [val for val in spearman_vals if val is not None]
-        if valid_pearson or valid_spearman:
+        pearson_vals = _collect_metric(per_gene_val, "pearson")
+        spearman_vals = spearman_by_split.get("val", [])
+        if pearson_vals or spearman_vals:
             model_dir.mkdir(parents=True, exist_ok=True)
             fig, axes = plt.subplots(1, 2, figsize=(9, 6), sharey=True)
-            if valid_spearman:
+            if spearman_vals:
                 plot_correlation_boxplot(
-                    valid_spearman,
+                    spearman_vals,
                     output_path=model_dir / "correlation_boxplots_val.png",
                     title=f"{result.model_name.upper()} | Spearman",
                     metric_label="Spearman correlation coefficient",
@@ -1145,9 +1291,9 @@ def _plot_cellwise_diagnostics(model_dir: Path, result: CellwiseModelResult) -> 
                 )
             else:
                 axes[0].axis("off")
-            if valid_pearson:
+            if pearson_vals:
                 plot_correlation_boxplot(
-                    valid_pearson,
+                    pearson_vals,
                     output_path=model_dir / "correlation_boxplots_val.png",
                     title=f"{result.model_name.upper()} | Pearson",
                     metric_label="Pearson correlation coefficient",
@@ -1159,6 +1305,54 @@ def _plot_cellwise_diagnostics(model_dir: Path, result: CellwiseModelResult) -> 
             fig.tight_layout(rect=(0, 0, 1, 0.95))
             fig.savefig(model_dir / "correlation_boxplots_val.png")
             plt.close(fig)
+
+
+def _persist_cellwise_model(
+    model_dir: Path,
+    result: CellwiseModelResult,
+    training: TrainingConfig,
+) -> None:
+    """Persist fitted model and scalers for later inference."""
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model = result.fitted_model
+    if model is None:
+        return
+
+    meta = {
+        "model_name": result.model_name,
+        "gene_names": result.gene_names,
+        "feature_names": result.feature_names,
+        "feature_block_slices": result.feature_block_slices,
+        "reshape": result.reshape,
+        "training": _serialize_value(training),
+    }
+    (model_dir / "model_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+
+    try:
+        if _torch_nn is not None and isinstance(model, _torch_nn.Module):
+            state = {
+                "state_dict": model.state_dict(),
+                "model_class": model.__class__.__name__,
+                "reshape": result.reshape,
+            }
+            torch.save(state, model_dir / "model.pt")
+        else:
+            joblib.dump(model, model_dir / "model.pkl")
+    except Exception as exc:  # pragma: no cover - defensive
+        _LOG.warning("Failed to persist model artifact for %s: %s", result.model_name, exc)
+
+    scalers = {
+        "feature_scaler.pkl": result.feature_scaler,
+        "target_scaler.pkl": result.target_scaler,
+    }
+    for name, scaler in scalers.items():
+        if scaler is None:
+            continue
+        try:
+            joblib.dump(scaler, model_dir / name)
+        except Exception as exc:  # pragma: no cover - defensive
+            _LOG.warning("Failed to persist %s for %s: %s", name, result.model_name, exc)
 
 
 def _serialize_value(value: Any) -> Any:
