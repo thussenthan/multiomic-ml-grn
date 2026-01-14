@@ -1,8 +1,8 @@
+# SPEAR: Single-cell Prediction of gene Expression from ATAC-seq Regression
+
 <div align="center">
   <img src="docs/images/spear_logo.png" alt="SPEAR Logo" width="400"/>
 </div>
-
-# SPEAR: Single-cell Prediction of gene Expression from ATAC-seq Regression
 
 SPEAR (Single-cell Prediction of gene Expression from ATAC-seq Regression) is an end-to-end machine-learning framework for training and evaluating multi-omics integration models. The toolkit focuses on predicting the full RNA gene expression vector for every cell directly from its paired single-cell ATAC accessibility profile, pairing reproducible preprocessing with a modular model zoo, batchable CLI entry points, and plotting notebooks for downstream analysis.
 
@@ -150,6 +150,7 @@ SVR defaults to a linear kernel with configurable hyperparameters via `TrainingC
 
 1. **AnnData loading:** ATAC and RNA `h5ad` matrices are loaded through `anndata`, reindexed to a common cell ordering, and coerced to dense/sparse formats as required.
 2. **Modal layers:**
+
    - ATAC: Counts-per-million is created by default (`training.atac_layer='counts_per_million'`); alternative transforms (such as TF–IDF) can be requested via configuration.
    - RNA: log1p CPM (`log1p_cpm`) layer computed on demand; if present, double transforms are skipped.
 
