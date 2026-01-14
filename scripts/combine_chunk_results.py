@@ -5,8 +5,8 @@ Combine per-chunk training outputs into unified result folders.
 Typical usage:
 
     python scripts/combine_chunk_results.py \
-        --input-root output/results/grn_regression_cellwise \
-        --run-prefix grn_1000genes_k5_pg20_20251106 \
+        --input-root output/results/spear_results \
+        --run-prefix spear_1000genes_k5_pg20_20251106 \
         --include-predictions
 
 The script scans `input-root` for directories produced by chunked Slurm jobs
@@ -319,7 +319,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Combine results from chunked runs.")
     parser.add_argument(
         "--input-root",
-        default="output/results/grn_regression_cellwise",
+        default="output/results/spear_results",
         type=Path,
         help="Directory containing chunked run outputs.",
     )

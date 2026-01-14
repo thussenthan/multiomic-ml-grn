@@ -1,6 +1,10 @@
-# GRN Regression Pipeline
+<div align="center">
+  <img src="docs/images/spear_logo.png" alt="SPEAR Logo" width="400"/>
+</div>
 
-End-to-end machine-learning framework for training and evaluating multi-omics integration and gene regulatory network (GRN) regression models. The toolkit focuses on predicting the full RNA gene expression vector for every cell directly from its paired single-cell ATAC accessibility profile, pairing reproducible preprocessing with a modular model zoo, batchable CLI entry points, and plotting notebooks for downstream analysis.
+# SPEAR: Single-cell Prediction of gene Expression from ATAC-seq Regression
+
+SPEAR (Single-cell Prediction of gene Expression from ATAC-seq Regression) is an end-to-end machine-learning framework for training and evaluating multi-omics integration models. The toolkit focuses on predicting the full RNA gene expression vector for every cell directly from its paired single-cell ATAC accessibility profile, pairing reproducible preprocessing with a modular model zoo, batchable CLI entry points, and plotting notebooks for downstream analysis.
 
 ## Key Features
 
@@ -19,9 +23,9 @@ End-to-end machine-learning framework for training and evaluating multi-omics in
 - **k-NN smoothing:** Each cell is smoothed by averaging with its k nearest neighbors (default k=19 for `smoothing_k=20`) using PCA-informed nearest-neighbor search to reduce sparsity while maintaining dataset size.
 - **Optional pseudobulk aggregation:** PCA-informed, group-aware pooling within each sample when `pseudobulk_group_size > 1`.
 - **Group-aware splitting:** 70/15/15 train/val/test splits with `GroupShuffleSplit` keyed by `group_key` (default `sample`; falls back to random when insufficient groups), plus 5-fold cross-validation using `GroupKFold` when possible.
-- **Model zoo:** CNN, RNN, LSTM, Transformer, Graph (implicit message passing), PyTorch MLP, Random Forest, Extra Trees, HistGradientBoosting, XGBoost, CatBoost, SVR, Ridge, Elastic Net, Lasso, and OLS. Each model is defined in `ml_grn_pipeline.models` and accessible through the CLI.
-- **Unified diagnostics:** `analysis/grn_results_analysis.ipynb` replaces prior plotting scripts, generating per-gene Pearson summaries, violin plots, top-genes scatter plots, RMSE comparisons, prediction-vs-truth charts, and epoch history curves directly from run outputs.
-- **Batch execution:** `jobs/slurm_grn_cellwise_chunked.sbatch` targets CPU nodes, while `jobs/slurm_grn_cellwise_chunked_gpu.sbatch` allocates GPUs for deep models; both expose environment variables for model selection, chunking, hyperparameter overrides, and manifests.
+- **Model zoo:** CNN, RNN, LSTM, Transformer, Graph (implicit message passing), PyTorch MLP, Random Forest, Extra Trees, HistGradientBoosting, XGBoost, CatBoost, SVR, Ridge, Elastic Net, Lasso, and OLS. Each model is defined in `spear.models` and accessible through the CLI.
+- **Unified diagnostics:** `analysis/spear_results_analysis.ipynb` replaces prior plotting scripts, generating per-gene Pearson summaries, violin plots, top-genes scatter plots, RMSE comparisons, prediction-vs-truth charts, and epoch history curves directly from run outputs.
+- **Batch execution:** `jobs/slurm_spear_cellwise_chunked.sbatch` targets CPU nodes, while `jobs/slurm_spear_cellwise_chunked_gpu.sbatch` allocates GPUs for deep models; both expose environment variables for model selection, chunking, hyperparameter overrides, and manifests.
 
 ### Data Snapshot
 
@@ -39,12 +43,11 @@ End-to-end machine-learning framework for training and evaluating multi-omics in
 
 ```text
 analysis/figs/               # Notebook outputs and generated figures
-analysis/grn_results_analysis.ipynb
+analysis/spear_results_analysis.ipynb
 data/                        # Raw AnnData matrices, manifests, references
-jobs/slurm_grn_cellwise_chunked.sbatch
-jobs/slurm_grn_cellwise_chunked_gpu.sbatch
+jobs/slurm_spear_cellwise_chunked.sbatch
+jobs/slurm_spear_cellwise_chunked_gpu.sbatch
 src/                         # Core Python package (config, data, training, evaluation)
-output/                      # Generated logs and model results (ignored by git)
 scripts/                     # Minimal helper scripts (data prep only)
 todo.md                      # Running task list
 ```
@@ -63,13 +66,13 @@ pip install -e .
 
 ## Running the Pipeline
 
-The CLI exposes all data preparation and model training settings. Basic example:
+The CLI exposes all data preparation and model training settings. Basic example (either `spear` or `python -m spear.cli`):
 
 ```bash
-python -m ml_grn_pipeline.cli \
+spear \
   --base-dir "$(pwd)" \
   --models lstm transformer \
-  --gene-manifest data/manifests/selected_genes_1000.csv \
+  --gene-manifest data/embryonic/manifests/selected_genes_100.csv \
   --epochs 100 \
   --pseudobulk-group-size 20 \
   --device auto
@@ -79,7 +82,7 @@ Environment / CLI highlights:
 
 - `--gene-manifest` guarantees that every model trains on the same gene subset.
 - `--chromosomes genome-wide` (default) processes all annotations; provide a list to restrict loci.
-- `--run-name` customises the output directory name under `output/results/grn_regression/`.
+- `--run-name` customises the output directory name.
 - `--device` supports `cuda`, `cpu`, or `auto` (prefers CUDA when available; falls back otherwise).
 - `--disable-pseudobulk` is a quick toggle to benchmark true single-cell training (equivalent to setting `--pseudobulk-group-size 1`).
 - `--atac-layer` lets you swap CPM for alternative ATAC transforms such as `tfidf` or disable normalisation entirely.
@@ -89,22 +92,22 @@ For large sweeps, schedule via Slurm:
 ```bash
 MODELS="transformer mlp" \
 RUN_NAME=allgenes_meta20_k5 \
-GENE_MANIFEST=data/manifests/all_genes_annotated.csv \
-sbatch --array=1-4 jobs/slurm_grn_cellwise_chunked_gpu.sbatch
+GENE_MANIFEST=data/embryonic/manifests/all_genes_annotated.csv \
+sbatch --array=1-4 jobs/slurm_spear_cellwise_chunked_gpu.sbatch
 
 # CPU-only baseline (tree ensembles, SVR, etc.)
 MODELS="xgboost svr" \
 RUN_NAME=allgenes_meta20_k5_cpu \
-GENE_MANIFEST=data/manifests/all_genes_annotated.csv \
-sbatch --array=1-4 jobs/slurm_grn_cellwise_chunked.sbatch
+GENE_MANIFEST=data/embryonic/manifests/all_genes_annotated.csv \
+sbatch --array=1-4 jobs/slurm_spear_cellwise_chunked.sbatch
 ```
 
 The script multiplies models × chunks across the array indices and auto-configures logging paths, environment setup, and manifest wiring.
 
 ## Results & Visualization
 
-1. Run the CLI (locally or via Slurm) to populate `output/results/grn_regression/<run_name>/models/<model_name>/` with metrics, predictions, histories, and fitted artifacts.
-2. Open `analysis/grn_results_analysis.ipynb` and execute the cells. Adjust `RUN_INCLUDE_GLOBS` at the top of the notebook if you want to focus on specific runs.
+1. Run the CLI (locally or via Slurm) to generate metrics, predictions, histories, and fitted artifacts.
+2. Open `analysis/spear_results_analysis.ipynb` and execute the cells. Adjust `RUN_INCLUDE_GLOBS` at the top of the notebook if you want to focus on specific runs.
 3. Generated figures (violin plots, RMSE bars, scatter plots, epoch curves) are written back to `analysis/figs/` and CSV summaries are stored alongside them.
 
 Only per-gene **test-set** Pearson correlations are emphasised in the visualizations. Validation metrics remain available for context (e.g., epoch curves) but are not part of the main comparisons.
@@ -147,7 +150,6 @@ SVR defaults to a linear kernel with configurable hyperparameters via `TrainingC
 
 1. **AnnData loading:** ATAC and RNA `h5ad` matrices are loaded through `anndata`, reindexed to a common cell ordering, and coerced to dense/sparse formats as required.
 2. **Modal layers:**
-
    - ATAC: Counts-per-million is created by default (`training.atac_layer='counts_per_million'`); alternative transforms (such as TF–IDF) can be requested via configuration.
    - RNA: log1p CPM (`log1p_cpm`) layer computed on demand; if present, double transforms are skipped.
 

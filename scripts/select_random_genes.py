@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select a reproducible set of well-expressed genes for GRN modeling."""
+"""Select a reproducible set of well-expressed genes for SPEAR modeling."""
 
 
 import argparse
@@ -10,8 +10,8 @@ import anndata as ad
 import numpy as np
 import scipy.sparse as sp
 
-from ml_grn_pipeline.config import PathsConfig, TrainingConfig
-from ml_grn_pipeline.data import GeneInfo, parse_gtf, select_genes
+from spear.config import PathsConfig, TrainingConfig
+from spear.data import GeneInfo, parse_gtf, select_genes
 
 DEFAULT_GENE_COUNT = 100
 
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         "--output",
         type=Path,
         help=(
-            "Optional output file path; defaults to output/results/grn_regression_cellwise/selected_genes_100_precomputed.csv"
+            "Optional output file path; defaults to data/manifests/selected_genes_100.csv"
         ),
     )
     parser.add_argument(
@@ -175,7 +175,7 @@ def main() -> None:
 
     sampled = sample_genes(candidates, count=args.gene_count, random_state=random_state)
 
-    default_output = paths.output_dir / "grn_regression_cellwise" / "selected_genes_100_precomputed.csv"
+    default_output = paths.base_dir / "data" / "embryonic" / "manifests" / "selected_genes_100.csv"
     output_path = args.output if args.output is not None else default_output
     write_manifest(sampled, fractions, output_path)
 

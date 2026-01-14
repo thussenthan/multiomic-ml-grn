@@ -3,9 +3,9 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ml-grn-pipeline"
+name = "spear"
 version = "0.1.0"
-description = "Gene regulatory network regression pipeline"
+description = "SPEAR: Single-cell Prediction of gene Expression from ATAC-seq Regression"
 readme = "README.md"
 authors = [{name = "tqw5435"}]
 requires-python = ">=3.10"
@@ -35,7 +35,7 @@ notebook = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["ml_grn_pipeline"]
+include = ["spear"]
 
 [project.scripts]
-ml-grn-pipeline = "ml_grn_pipeline.cli:main"
+spear = "spear.cli:main"

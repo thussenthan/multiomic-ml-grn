@@ -1,6 +1,6 @@
-# End-to-End Runbook
+# SPEAR End-to-End Runbook (Single-cell Prediction of gene Expression from ATAC-seq Regression)
 
-This runbook connects the biological motivation for the mouse embryonic stem cell (mESC) project with the computational workflow implemented in this repository. Follow the stages in order when onboarding a new environment, reproducing results, or preparing a public release.
+This runbook connects the biological motivation for the mouse embryonic stem cell (mESC) project with the computational workflow implemented in the SPEAR repository. Follow the stages in order when onboarding a new environment, reproducing results, or preparing a public release.
 
 ## Orientation
 
@@ -23,8 +23,8 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 ### Key data products
 
 - Raw GEO downloads and curated AnnData layouts are documented in `docs/mouse_esc_dataset.md`.
-- Gene manifests live under `data/manifests/` and define target scopes for each run.
-- Reference genomes, annotations, and feature engineering outputs are kept in `data/reference/` and `data/processed/`.
+- Gene manifests live under `data/embryonic/manifests/` and define target scopes for each run.
+- Reference annotations are kept in `data/reference/`.
 
 ## Stage 1 - Bootstrap Environment
 
@@ -33,7 +33,7 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 - Clone the repository into `$HOME` or project scratch.
 - Install Conda or Mamba if not already available.
 - Create the environment: `conda env create -f environment.yml` (or `mamba env create ...`).
-- Activate with `conda activate grn_ml_env_py311` and install the project in editable mode (`pip install -e .`) so local modifications are picked up.
+- Activate your conda environment and install the project in editable mode (`pip install -e .`) so local modifications are picked up.
 - Optional: install dev tools (`pip install -r requirements-dev.txt`) and notebook tooling (`pip install -r requirements-notebook.txt`) if you plan to lint, test, or run notebooks locally.
 
 ### Stage 1 - Computer science perspective
@@ -50,10 +50,10 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 
 ### Stage 2 - Practical steps
 
-- Review `docs/mouse_esc_dataset.md` for provenance, sample inventory, and storage paths.
-- Submit `sbatch jobs/download_mesc_raw_data.sbatch` to mirror raw matrices and ATAC fragment files into the shared data lake.
-- Verify curated AnnData files exist under `/gpfs/Labs/Uzun/.../DS014_DOI496239_MOUSE_ESCDAYS7AND8`; refresh them if raw downloads were updated.
-- Ensure symbolic links or environment variables in notebooks and scripts point to the staged directories.
+- Review `docs/mouse_esc_dataset.md` for provenance and sample inventory.
+- Download raw data from GEO accession GSE205117 and place in `data/embryonic/raw/`.
+- Preprocess data using scripts in `scripts/` to generate AnnData files in `data/embryonic/processed/`.
+- Ensure reference GTF files are present in `data/reference/`.
 
 ### Stage 2 - Computer science perspective
 
@@ -92,7 +92,7 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 - Feature engineering unites motif scans, accessibility windows, and sequence-derived covariates to represent regulatory potential.
 - Training operates per-chunk, where each chunk is a subset of target genes; Slurm arrays map chunk/model pairs to jobs for scalability.
 - Model families span deep learning (CNN, RNN, LSTM, Transformer, MLP) and classical approaches (XGBoost, Random Forest, Elastic Net) to capture both nonlinear and interpretable regimes.
-- Results artifacts mirror the hierarchy: `output/results/grn_regression_cellwise/<run_name>/models/<model>/chunk_<id>/`.
+- Results artifacts are organized hierarchically by run name, model, and chunk.
 
 ### Why it matters
 
@@ -103,7 +103,7 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 
 ### Stage 5 - Practical steps
 
-- Ensure `output/logs`, `output/results`, and `analysis/figs` exist (`mkdir -p` as needed).
+- Ensure output directories exist (`mkdir -p` as needed).
 - Prepare a dedicated log directory if cluster policy requires absolute paths distinct from the repo.
 - Confirm that storage quotas can accommodate model checkpoints, particularly for Transformer runs.
 
@@ -121,9 +121,9 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 
 ### Stage 6 - Practical steps
 
-- Execute a CPU-only smoke run:  
-  `python -m ml_grn_pipeline.cli --models mlp --gene-manifest data/manifests/smoke_genes.txt --device cpu --k-folds 2 --epochs 2 --run-name dev_smoke_local`
-- Confirm outputs land in `output/results/grn_regression_cellwise/dev_smoke_local/`.
+- Execute a CPU-only smoke run (via `spear` or module form):  
+  `spear --models mlp --gene-manifest data/embryonic/manifests/selected_genes_10.csv --device cpu --k-folds 2 --epochs 2 --run-name dev_smoke_local`
+- Confirm outputs are generated successfully.
 - Inspect logs for import errors, missing data references, or serialization issues.
 - You can also run `python scripts/preflight_check.py` to validate environment, package availability, data paths (AnnData/GTF), and SLURM scripts before queueing jobs.
 
@@ -140,9 +140,9 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 ### Stage 7 - Practical steps
 
 - For GPU-capable deep models:  
-  `GENE_MANIFEST="$PWD/data/manifests/selected_genes_1000.csv" MODELS="cnn rnn lstm transformer mlp" RUN_NAME=grn_gpu_full EXTRA_ARGS="--epochs 200 --batch-size 256 --k-folds 5 --train-fraction 0.7 --val-fraction 0.15 --test-fraction 0.15" sbatch --array=1-60 jobs/slurm_grn_cellwise_chunked_gpu.sbatch`
+  `GENE_MANIFEST="$PWD/data/embryonic/manifests/selected_genes_1000.csv" MODELS="cnn rnn lstm transformer mlp" RUN_NAME=spear_gpu_full EXTRA_ARGS="--epochs 200 --batch-size 256 --k-folds 5 --train-fraction 0.7 --val-fraction 0.15 --test-fraction 0.15" sbatch --array=1-60 jobs/slurm_spear_cellwise_chunked_gpu.sbatch`
 - For CPU ensembles:  
-  `GENE_MANIFEST="$PWD/data/manifests/selected_genes_1000.csv" MODELS="xgboost random_forest hist_gradient_boosting elastic_net ridge" RUN_NAME=grn_cpu_full EXTRA_ARGS="--k-folds 5" sbatch --array=1-60 jobs/slurm_grn_cellwise_chunked.sbatch`
+  `GENE_MANIFEST="$PWD/data/embryonic/manifests/selected_genes_1000.csv" MODELS="xgboost random_forest hist_gradient_boosting elastic_net ridge" RUN_NAME=spear_cpu_full EXTRA_ARGS="--k-folds 5" sbatch --array=1-60 jobs/slurm_spear_cellwise_chunked.sbatch`
 - Adjust partitions, memory, and array bounds according to cluster limits and `len(MODELS) * CHUNK_TOTAL`.
 
 ### Stage 7 - Computer science perspective
@@ -177,7 +177,7 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 
 ### Stage 9 - Practical steps
 
-- Use scripts in `scripts/` (e.g., `combine_filtered.py`) or notebooks under `analysis/` to merge chunk outputs.
+- Use scripts in `scripts/` (e.g., `combine_chunk_results.py`) or notebooks under `analysis/` to merge chunk outputs.
 - Generate model comparison plots and feature importance summaries; store figures in `analysis/figs`.
 - Document findings in Markdown or notebooks, referencing run names and configuration hashes.
 

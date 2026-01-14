@@ -11,13 +11,6 @@
 - Primary study: _Decoding gene regulation in the mouse embryo using single-cell multi-omics_ ([bioRxiv, 2022](https://www.biorxiv.org/content/10.1101/2022.06.15.496239v2)).
 - GEO accession: [GSE205117](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE205117).
 
-## Storage Layout
-
-- Raw files (per-sample directories created by the download script):  
-  `/gpfs/Labs/Uzun/DATA/PROJECTS/2024.SC_MO_TRN_DB.MIRA/REPOSITORY/CURRENT/SINGLE_CELL_DATASETS/DS014_DOI496239_MOUSE_ESC_RAW_FILES`
-- Processed AnnData objects and curated matrices:  
-  `/gpfs/Labs/Uzun/DATA/PROJECTS/2024.SC_MO_TRN_DB.MIRA/REPOSITORY/CURRENT/SINGLE_CELL_DATASETS/DS014_DOI496239_MOUSE_ESCDAYS7AND8`
-
 ## Sample Inventory
 
 | Label            | GEO sample              | Modalities                                        |
@@ -34,20 +27,11 @@
 | E8.75_rep1       | GSM6205425 / GSM6205436 | GEX + ATAC fragments                              |
 | E8.75_rep2       | GSM6205426 / GSM6205437 | GEX + ATAC fragments                              |
 
-## Downloading Raw Data
+## Data Access
 
-1. Ensure you are on a Slurm login node with outbound FTP access.
-2. Submit the Slurm batch script that orchestrates per-sample downloads:
+The raw and processed data files are available from GEO accession [GSE205117](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE205117). Download the required files for your analysis:
 
-   ```bash
-   sbatch jobs/download_mesc_raw_data.sbatch
-   ```
+- **GEX matrices**: Per-sample barcodes, features, and count matrices (`.tsv.gz` or `.mtx.gz`)
+- **ATAC fragments**: Per-sample fragment files for chromatin accessibility
 
-3. Monitor progress via the script log files (`/gpfs/Labs/Uzun/SCRIPTS/PROJECTS/2024.SINGLE_CELL_GRN_INFERENCE.MOELLER/LOGS/download_raw_mesc_files.{log,err}`).
-4. Verify that each sample directory contains the expected `*.tsv.gz` or `*.mtx.gz` files before launching downstream preprocessing.
-
-## Notes
-
-- The script skips files that already exist, allowing safe reruns if a transfer fails.
-- Update partition, memory, or output paths in the Slurm header if running on a different cluster.
-- Processed objects in the curated directory should be refreshed after re-downloading raw data to avoid mismatches.
+Store downloaded files in appropriate directories under `data/embryonic/raw/` or `data/endothelial/raw/` depending on your dataset.

@@ -1,6 +1,6 @@
-# GRN Pipeline Overview
+# SPEAR Overview (Single-cell Prediction of gene Expression from ATAC-seq Regression)
 
-This document summarizes the current end-to-end workflow for the single-cell gene regulatory network (GRN) regression pipeline so new contributors can onboard quickly before the project is published to GitHub.
+This document summarizes the current end-to-end workflow for SPEAR (Single-cell Prediction of gene Expression from ATAC-seq Regression)—so new contributors can onboard quickly.
 
 ## 1. Data Sources and Configuration
 
@@ -14,7 +14,7 @@ This document summarizes the current end-to-end workflow for the single-cell gen
 
 1. Parse the GTF to obtain gene IDs/names and TSS information (respecting chromosome filters or explicit gene lists).
 2. Validate that requested genes exist in the RNA AnnData matrix and meet expression criteria (`min_cells_per_gene`, `min_expression`, `min_expression_fraction`).
-3. Persist selected genes and their expression fractions alongside each run (see `output/results/grn_regression/<run_name>/selected_genes.csv`).
+3. Persist selected genes and their expression fractions alongside each run.
 
 ## 3. Feature Construction & Normalization
 
@@ -34,7 +34,7 @@ To reduce sparsity while maintaining dataset size, each cell is smoothed by aver
 
 ## 5. Model Suite
 
-`ml_grn_pipeline.models.build_model` exposes a broad model zoo so experiments can toggle architectures via CLI flags:
+`spear.models.build_model` exposes a broad model zoo so experiments can toggle architectures via CLI flags:
 
 - Neural models: `cnn`, `rnn`, `lstm`, `transformer`, `graph`, `mlp` (PyTorch).
 - Tree ensembles & boosting: `random_forest`, `extra_trees`, `hist_gradient_boosting`, `xgboost`, `catboost`.
@@ -52,21 +52,7 @@ Multi-output training (predicting all genes simultaneously) is the default; use 
 
 ## 7. Output Layout
 
-```text
-output/results/grn_regression/
-  └── <run_name>/
-      ├── selected_genes.csv
-      ├── summary_metrics.csv
-      └── models/
-          └── <model_id>/
-              ├── metrics_by_gene.csv
-              ├── metrics_summary.csv
-              ├── predictions_raw.csv (if generated)
-              ├── histories/ (per-gene CSV + plots, torch models)
-              └── scatter/residual/diagnostic figures
-```
-
-Logs for each CLI run live in `output/logs/<run_name>.log`; Slurm jobs write to `output/logs/<job-name>_<jobid>_<task>.{out,err}`.
+Results are organized by run name and model, with metrics, predictions, and diagnostic figures stored in a consistent hierarchy. Logs for each CLI run are written alongside the outputs.
 
 ## 8. Job Submission Workflow
 
@@ -76,21 +62,21 @@ Logs for each CLI run live in `output/logs/<run_name>.log`; Slurm jobs write to 
   ```bash
   MODELS="cnn lstm transformer mlp" \
   RUN_NAME=allgenes_meta20_k5 \
-  GENE_MANIFEST=data/manifests/all_genes_annotated.csv \
-  sbatch --array=1-4 jobs/slurm_grn_cellwise_chunked_gpu.sbatch
+  GENE_MANIFEST=data/embryonic/manifests/all_genes_annotated.csv \
+  sbatch --array=1-4 jobs/slurm_spear_cellwise_chunked_gpu.sbatch
 
   MODELS="xgboost svr random_forest extra_trees hist_gradient_boosting ridge elastic_net lasso ols" \
   RUN_NAME=allgenes_meta20_k5_cpu \
-  GENE_MANIFEST=data/manifests/all_genes_annotated.csv \
-  sbatch --array=1-9 jobs/slurm_grn_cellwise_chunked.sbatch
+  GENE_MANIFEST=data/embryonic/manifests/all_genes_annotated.csv \
+  sbatch --array=1-9 jobs/slurm_spear_cellwise_chunked.sbatch
   ```
 
 - The script maps each array index to a model × chunk combination, activates the configured Conda environment, and forwards all relevant CLI arguments (device, pseudobulk settings, CV folds, etc.).
 
 ## 9. Post-run Analysis
 
-1. Verify array tasks completed successfully and check aggregate metrics in `<run_name>/summary_metrics.csv`.
-2. Open `analysis/grn_results_analysis.ipynb`, adjust `RUN_INCLUDE_GLOBS` if necessary, and execute the notebook to regenerate per-gene test Pearson summaries, violin plots, RMSE comparisons, prediction-vs-truth scatters, and epoch curves.
+1. Verify array tasks completed successfully and check aggregate metrics.
+2. Open `analysis/spear_results_analysis.ipynb`, adjust `RUN_INCLUDE_GLOBS` if necessary, and execute the notebook to regenerate per-gene test Pearson summaries, violin plots, RMSE comparisons, prediction-vs-truth scatters, and epoch curves.
 3. Commit regenerated figures/CSVs in `analysis/figs/` so published artifacts match the latest experiments.
 
 ## 10. Feature Importance Artifacts

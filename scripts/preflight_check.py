@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Pre-flight validation script for GRN pipeline runs.
+"""Pre-flight validation script for SPEAR pipeline runs.
 
+SPEAR: Single-cell Prediction of gene Expression from ATAC-seq Regression.
 Validates environment, data files, dependencies, and configuration before launching
 expensive HPC jobs. Run this before submitting SLURM array jobs to catch
 configuration errors early.
@@ -8,7 +9,7 @@ configuration errors early.
 Usage:
     python scripts/preflight_check.py
     python scripts/preflight_check.py --base-dir /path/to/project
-    python scripts/preflight_check.py --gene-manifest data/manifests/genes.txt
+    python scripts/preflight_check.py --gene-manifest data/embryonic/manifests/selected_genes_100.csv
     python scripts/preflight_check.py --atac-path data/embryonic/processed/combined_ATAC_qc.h5ad
 """
 
@@ -233,11 +234,11 @@ def check_gene_manifest(path: Optional[Path]) -> bool:
 
 
 def check_pipeline_package() -> bool:
-    """Verify ml_grn_pipeline package is importable."""
+    """Verify spear package is importable."""
     try:
-        import ml_grn_pipeline
-        from ml_grn_pipeline import config, data, models, training, evaluation
-        print_ok("Pipeline package 'ml_grn_pipeline' importable")
+        import spear
+        from spear import config, data, models, training, evaluation
+        print_ok("Pipeline package 'spear' importable")
         print_ok("  Core modules: config, data, models, training, evaluation")
         return True
     except ImportError as exc:
@@ -248,7 +249,7 @@ def check_pipeline_package() -> bool:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Pre-flight validation for GRN pipeline runs",
+        description="Pre-flight validation for SPEAR pipeline runs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -286,7 +287,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     base_dir = args.base_dir.expanduser().resolve()
     
-    print_header("GRN Pipeline Pre-flight Check")
+    print_header("SPEAR Pipeline Pre-flight Check")
     print(f"Base directory: {base_dir}\n")
     
     results = []
@@ -350,8 +351,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     
     # 4. SLURM scripts
     print_header("4. SLURM Job Scripts")
-    cpu_script = base_dir / "jobs" / "slurm_grn_cellwise_chunked.sbatch"
-    gpu_script = base_dir / "jobs" / "slurm_grn_cellwise_chunked_gpu.sbatch"
+    cpu_script = base_dir / "jobs" / "slurm_spear_cellwise_chunked.sbatch"
+    gpu_script = base_dir / "jobs" / "slurm_spear_cellwise_chunked_gpu.sbatch"
     results.append(check_file_exists(cpu_script, "CPU SLURM script"))
     results.append(check_file_exists(gpu_script, "GPU SLURM script"))
     

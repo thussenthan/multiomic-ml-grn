@@ -316,7 +316,7 @@ def _plot_gene_correlation(ax: plt.Axes, summary: pd.DataFrame) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot feature importance diagnostics for a model run")
-    parser.add_argument("run_dir", type=Path, help="Path to a grn_regression_cellwise run directory")
+    parser.add_argument("run_dir", type=Path, help="Path to a SPEAR run directory")
     parser.add_argument(
         "--model",
         default="mlp",

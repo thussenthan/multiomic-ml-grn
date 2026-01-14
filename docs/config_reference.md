@@ -1,11 +1,10 @@
-# Configuration Reference
+# SPEAR Configuration Reference
 
-This document outlines every user-facing knob in the `ml_grn_pipeline` package, including
-CLI flags, training defaults, model hyperparameters, and Slurm environment variables.
+This document outlines every user-facing knob in SPEAR (Single-cell Prediction of gene Expression from ATAC-seq Regression), implemented in the `spear` package, including CLI flags, training defaults, model hyperparameters, and Slurm environment variables.
 
 ## Command Line Interface
 
-The CLI entrypoint is `python -m ml_grn_pipeline.cli`. The table below lists all flags and
+The CLI entrypoint is `spear` (or `python -m spear.cli`). The table below lists all flags and
 their defaults.
 
 | Flag                          | Type      | Default                                                | Description                                                                                              |
@@ -138,7 +137,7 @@ Torch optimizers use `Adam(lr=1e-3, weight_decay=1e-5)` with automatic mixed pre
 
 ## Slurm Environment Variables
 
-Both job scripts (`jobs/slurm_grn_cellwise_chunked.sbatch` for CPU, `jobs/slurm_grn_cellwise_chunked_gpu.sbatch` for GPU) honor the following variables:
+Both job scripts (`jobs/slurm_spear_cellwise_chunked.sbatch` for CPU, `jobs/slurm_spear_cellwise_chunked_gpu.sbatch` for GPU) honor the following variables:
 
 | Variable                    | Default                                                               | Purpose                                                                       |
 | --------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
@@ -161,7 +160,7 @@ Both job scripts (`jobs/slurm_grn_cellwise_chunked.sbatch` for CPU, `jobs/slurm_
 | `EXTRA_ARGS`                | empty                                                                 | Additional CLI flags, e.g. `"--multi-output"`.                                |
 | `MULTI_OUTPUT`              | `1` (GPU) / `1` (CPU script expects)                                  | Enables cell-wise mode when truthy.                                           |
 | `BASE_DIR`                  | `$PWD`                                                                | Project root for the run.                                                     |
-| `ENV_NAME`                  | `grn_ml_env_py311`                                                    | Conda environment to activate.                                                |
+| `ENV_NAME`                  | `spear_env`                                                           | Conda environment to activate.                                                |
 | `GENOME_SCOPE`              | `genome-wide`                                                         | Controls `--chromosomes`.                                                     |
 
 These variables are optional; unset values fall back to script defaults shown above.

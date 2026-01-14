@@ -28,13 +28,7 @@ import logging
 from pathlib import Path
 from anndata import AnnData
 import multiprocessing as mp
-#import numpy as np
-# import random
-# import sys
-# import argparse
-# from grn_inference import utils
 
-# (Redundant second import of warnings retained intentionally) Silence a specific warning emitted by some environments
 warnings.filterwarnings("ignore", message="No device id is provided via `init_process_group`")
 
 
