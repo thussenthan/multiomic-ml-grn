@@ -160,8 +160,8 @@ def process_sample(sample_name: str):
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_DIR = PROJECT_ROOT / "filtered"  # Root project directory
-RAW_MESC_DATA_DIR = "/gpfs/Labs/Uzun/DATA/PROJECTS/2024.SC_MO_TRN_DB.MIRA/REPOSITORY/CURRENT/SINGLE_CELL_DATASETS/DS014_DOI496239_MOUSE_ESC_RAW_FILES"  # Location of per-sample 10x RNA dirs
-MESC_PEAK_MATRIX_FILE = "/gpfs/Labs/Uzun/DATA/PROJECTS/2024.SC_MO_TRN_DB.MIRA/REPOSITORY/CURRENT/SINGLE_CELL_DATASETS/DS014_DOI496239_MOUSE_ESCDAYS7AND8/scATAC_PeakMatrix.txt"  # Large shared scATAC peak matrix
+RAW_MESC_DATA_DIR = os.getenv("RAW_MESC_DATA_DIR", "")  # Per-sample 10x RNA dirs (set via env)
+MESC_PEAK_MATRIX_FILE = os.getenv("MESC_PEAK_MATRIX_FILE", "")  # Shared scATAC peak matrix (set via env)
 
 # MM10_GENOME_DIR = os.path.join(PROJECT_DIR, "")
 # MM10_GENE_TSS_FILE = os.path.join(PROJECT_DIR, "")
@@ -169,9 +169,27 @@ SAMPLE_INPUT_DIR = os.fspath(PROJECT_DIR)  # Where per-sample outputs are writte
 # OUTPUT_DIR = os.path.join(PROJECT_DIR, "")
 
 def main():
-    # List of sample directory names to process. (Note: 'E7.5_rep1' appears twice; verify if intentional)
-    sample_name_list = ["E7.5_rep1", "E7.5_rep1", "E7.75_rep1", "E8.0_rep2", "E8.5_rep2",
-                        "E8.75_rep2", "E7.5_rep2", "E8.0_rep1", "E8.5_rep1", "E8.75_rep1"]
+    if not RAW_MESC_DATA_DIR:
+        raise RuntimeError(
+            "RAW_MESC_DATA_DIR environment variable is not set. Please set it to a valid path before running this script."
+        )
+    if not MESC_PEAK_MATRIX_FILE:
+        raise RuntimeError(
+            "MESC_PEAK_MATRIX_FILE environment variable is not set. Please set it to a valid path before running this script."
+        )
+
+    # List of sample directory names to process.
+    sample_name_list = [
+        "E7.5_rep1",
+        "E7.75_rep1",
+        "E8.0_rep2",
+        "E8.5_rep2",
+        "E8.75_rep2",
+        "E7.5_rep2",
+        "E8.0_rep1",
+        "E8.5_rep1",
+        "E8.75_rep1",
+    ]
     
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 

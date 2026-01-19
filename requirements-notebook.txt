@@ -1,3 +1,0 @@
-jupyterlab>=4.0
-ipykernel>=6.29
-adjustText>=0.8.3

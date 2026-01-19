@@ -111,6 +111,45 @@ def _reshape_tensor_for_model(tens: torch.Tensor, reshape: str | None) -> torch.
         return tens.reshape(tens.shape[0], -1, 1)
     return tens
 
+
+def _should_scale_targets(config: TrainingConfig) -> bool:
+    """
+    Decide whether target values should be scaled based on the training configuration.
+
+    Parameters
+    ----------
+    config : TrainingConfig
+        Training configuration containing options that control target scaling,
+        including the choice of target scaler, whether scaling is forced, and
+        whether logarithmic transforms are already applied to the targets.
+
+    Returns
+    -------
+    bool
+        True if target scaling should be applied, False if it should be skipped.
+
+    Notes
+    -----
+    Target scaling is skipped when:
+
+    * ``config.target_scaler`` is ``None`` or ``"none"``.
+    * A logarithmic transform is already in use via ``config.log1p_transform`` or
+      an RNA expression layer whose name starts with ``"log"``.
+
+    Target scaling is always applied when:
+
+    * ``config.force_target_scaling`` is True, regardless of other settings.
+    """
+    if config.target_scaler in (None, "none"):
+        return False
+    if config.force_target_scaling:
+        return True
+    if config.log1p_transform or (
+        config.rna_expression_layer and config.rna_expression_layer.lower().startswith("log")
+    ):
+        return False
+    return True
+
 _LOG = get_logger(__name__)
 
 

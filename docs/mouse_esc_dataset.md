@@ -1,9 +1,9 @@
-# Mouse Embryonic Stem Cell (mESC) Multi-omics Dataset
+# Mouse Embryonic Multiome Dataset (GSE205117)
 
 ## Overview
 
-- Single-cell paired RNA-seq and ATAC-seq profiling of mouse embryonic stem cell differentiation.
-- Captures developmental time points spanning E7.5 through E8.75 with CRISPR perturbation controls.
+- Mouse early organogenesis profiled with the 10x Genomics Multiome assay.
+- Paired snRNA-seq and snATAC-seq across E7.5 to E8.75, including wild-type replicates and a Brachyury CRISPR T knockout condition.
 - Organism & strain: C57BL/6Babr mice.
 
 ## Source References
@@ -12,6 +12,8 @@
 - GEO accession: [GSE205117](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE205117).
 
 ## Sample Inventory
+
+The GEO series reports 11 samples spanning E7.5 to E8.75, including wild-type replicates and a Brachyury perturbation condition (CRISPR T knockout).
 
 | Label            | GEO sample              | Modalities                                        |
 | ---------------- | ----------------------- | ------------------------------------------------- |
@@ -27,6 +29,18 @@
 | E8.75_rep1       | GSM6205425 / GSM6205436 | GEX + ATAC fragments                              |
 | E8.75_rep2       | GSM6205426 / GSM6205437 | GEX + ATAC fragments                              |
 
+## Data Snapshot
+
+- **ATAC:** 54,301 cells × 192,248 peaks (sparse float32 counts 1–4). Single `mESC` label with sample sizes ranging ~1.8k–10.7k cells.
+- **RNA:** 54,301 cells × 32,285 genes (sparse integer counts up to 7,858 UMIs). QC metrics stored in `obs` (total counts, mitochondrial fraction, etc.).
+- **Library sizes:** ATAC median 25k peaks/cell (IQR 14k–39k); RNA median 11k UMIs/cell (IQR 7k–17k).
+- **Metadata:** Peak identifiers encode genomic coordinates; GTF parsing ensures gene IDs (e.g., `Kmt5b`) resolve consistently across modalities.
+
+## CRISPR KO Replicates
+
+- Do **not** merge CRISPR knockout replicates when preparing AnnData inputs. Each replicate should remain a distinct sample in `obs` (e.g., `obs["replicate"]`) so biological variance is preserved.
+- When running pseudobulk or cross-validation, keep replicate identifiers intact; the pipeline assumes replicates were not combined upstream and will treat each as an independent group.
+
 ## Data Access
 
 The raw and processed data files are available from GEO accession [GSE205117](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE205117). Download the required files for your analysis:
@@ -34,4 +48,4 @@ The raw and processed data files are available from GEO accession [GSE205117](ht
 - **GEX matrices**: Per-sample barcodes, features, and count matrices (`.tsv.gz` or `.mtx.gz`)
 - **ATAC fragments**: Per-sample fragment files for chromatin accessibility
 
-Store downloaded files in appropriate directories under `data/embryonic/raw/` or `data/endothelial/raw/` depending on your dataset.
+Store downloaded files under `data/embryonic/raw/`.

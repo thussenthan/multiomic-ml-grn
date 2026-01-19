@@ -155,7 +155,7 @@ def preprocess_modalities(
     rna: ad.AnnData,
     training: TrainingConfig,
 ) -> tuple[ad.AnnData, ad.AnnData]:
-    """Apply modality-specific normalization layers and scaling."""
+    """Apply modality-specific normalization layers."""
 
     if training.atac_layer and training.atac_layer not in atac.layers:
         if training.atac_layer == "tfidf":
@@ -299,7 +299,7 @@ def load_datasets(paths: PathsConfig) -> Tuple[ad.AnnData, ad.AnnData]:
     atac_cells = np.asarray(atac.obs_names).astype(str)
     rna_cells = np.asarray(rna.obs_names).astype(str)
     if not np.array_equal(atac_cells, rna_cells):
-        _LOG.info("Reindexing ATAC data to match RNA cell ordering")
+        _LOG.info("Aligning ATAC/RNA data to shared barcodes")
         shared = np.intersect1d(atac_cells, rna_cells)
         if shared.size == 0:
             raise ValueError("No overlapping cell barcodes between ATAC and RNA data")

@@ -12,10 +12,7 @@ import urllib.request
 from pathlib import Path
 
 
-DEFAULT_DOWNLOAD_DIR = Path(
-    "/gpfs/Labs/Uzun/DATA/PROJECTS/2024.SC_MO_TRN_DB.MIRA/REPOSITORY/"
-    "CURRENT/SINGLE_CELL_DATASETS/DS014_DOI496239_MOUSE_ESC_RAW_FILES"
-)
+DEFAULT_DOWNLOAD_DIR = Path.cwd() / "data" / "raw"
 
 SAMPLES: dict[str, list[str]] = {
     "E7.5_rep1": [

@@ -14,39 +14,28 @@ SPEAR (Single-cell Prediction of gene Expression from ATAC-seq Regression) is an
 - Build feature matrices using ±10 kb windows around each gene's transcription start site, binned at 500 bp (40 bins per gene) and recomputed for every run.
 - Provide a modular model zoo spanning convolutional, recurrent, transformer, graph-based, gradient boosting (XGBoost, CatBoost), multilayer perceptron, tree ensembles, and linear baselines (Ridge, Elastic Net, Lasso, OLS) so comparative experiments are one CLI flag away.
 - Produce test-set diagnostics (scatter plots, per-gene Pearson summaries, epoch histories) while persisting raw predictions for reproducibility and downstream analysis.
-- Support reproducible batch execution via Slurm with detailed logging and chunk-aware job arrays.
 
 - **Modal-specific normalization:**
-  - ATAC matrices are reindexed to match RNA cell order; by default they are TF–IDF transformed (`tfidf` layer), with alternatives (`counts_per_million`, `log1p_cpm`, or none) available via the `atac_layer` setting.
-  - RNA counts are converted to counts-per-million and log-transformed (`log1p_cpm` layer), then scaled with `scanpy.pp.scale` using the same zero-centering guard. A guard prevents double log1p transforms when a normalized layer already exists.
-  - Optional `StandardScaler`/`MinMaxScaler` may be applied on the feature and target side based on the run configuration.
+  - ATAC/RNA matrices are subset to shared barcodes and aligned to a common ordering; by default ATAC uses TF–IDF (`tfidf` layer), with alternatives (`counts_per_million`, `log1p_cpm`, or none) available via the `atac_layer` setting.
+  - RNA counts are converted to counts-per-million and log-transformed (`log1p_cpm` layer) if needed; double log1p transforms are skipped when a normalized layer already exists.
+  - Optional `StandardScaler`/`MinMaxScaler` may be applied on features and targets (target scaling is skipped for log-transformed targets unless `force_target_scaling=True`).
 - **k-NN smoothing:** Each cell is smoothed by averaging with its k nearest neighbors (default k=19 for `smoothing_k=20`) using PCA-informed nearest-neighbor search to reduce sparsity while maintaining dataset size.
 - **Optional pseudobulk aggregation:** PCA-informed, group-aware pooling within each sample when `pseudobulk_group_size > 1`.
 - **Group-aware splitting:** 70/15/15 train/val/test splits with `GroupShuffleSplit` keyed by `group_key` (default `sample`; falls back to random when insufficient groups), plus 5-fold cross-validation using `GroupKFold` when possible.
 - **Model zoo:** CNN, RNN, LSTM, Transformer, Graph (implicit message passing), PyTorch MLP, Random Forest, Extra Trees, HistGradientBoosting, XGBoost, CatBoost, SVR, Ridge, Elastic Net, Lasso, and OLS. Each model is defined in `spear.models` and accessible through the CLI.
 - **Unified diagnostics:** `analysis/spear_results_analysis.ipynb` replaces prior plotting scripts, generating per-gene Pearson summaries, violin plots, top-genes scatter plots, RMSE comparisons, prediction-vs-truth charts, and epoch history curves directly from run outputs.
-- **Batch execution:** `jobs/slurm_spear_cellwise_chunked.sbatch` targets CPU nodes, while `jobs/slurm_spear_cellwise_chunked_gpu.sbatch` allocates GPUs for deep models; both expose environment variables for model selection, chunking, hyperparameter overrides, and manifests.
 
-### Data Snapshot
+### Datasets
 
-- **ATAC:** 54,301 cells × 192,248 peaks (sparse float32 counts 1–4). Single `mESC` label with sample sizes ranging ~1.8k–10.7k cells.
-- **RNA:** 54,301 cells × 32,285 genes (sparse integer counts up to 7,858 UMIs). QC metrics stored in `obs` (total counts, mitochondrial fraction, etc.).
-- **Library sizes:** ATAC median 25k peaks/cell (IQR 14k–39k); RNA median 11k UMIs/cell (IQR 7k–17k).
-- **Metadata:** Peak identifiers encode genomic coordinates; GTF parsing ensures gene IDs (e.g., `Kmt5b`) resolve consistently across modalities.
-
-### CRISPR KO Replicates
-
-- Do **not** merge CRISPR knockout replicates when preparing AnnData inputs. Each replicate should remain a distinct sample in `obs` (e.g., `obs["replicate"]`) so biological variance is preserved.
-- When running pseudobulk or cross-validation, keep replicate identifiers intact; the pipeline assumes replicates were not combined upstream and will treat each as an independent group.
+- Mouse embryonic multiome (GSE205117): `docs/mouse_esc_dataset.md`
+- Human hemogenic endothelium multiome (GSE270141): `docs/endothelial_dataset.md`
 
 ## Repository Layout
 
 ```text
 analysis/figs/               # Notebook outputs and generated figures
 analysis/spear_results_analysis.ipynb
-data/                        # Raw AnnData matrices, manifests, references
-jobs/slurm_spear_cellwise_chunked.sbatch
-jobs/slurm_spear_cellwise_chunked_gpu.sbatch
+data/                        # Local AnnData matrices, manifests, references (not published)
 src/                         # Core Python package (config, data, training, evaluation)
 scripts/                     # Minimal helper scripts (data prep only)
 todo.md                      # Running task list
@@ -63,6 +52,13 @@ pip install -e .
 ```
 
 > Torch and XGBoost wheels can be large on HPC systems—consider using `pip install --no-cache-dir` if disk quotas are tight.
+> Data files are not published with this repository; fetch or generate them locally before running the pipeline.
+
+## Data Requirements
+
+- Paired ATAC/RNA `h5ad` files with overlapping barcodes.
+- A reference GTF containing gene annotations.
+- See `docs/mouse_esc_dataset.md` and `docs/endothelial_dataset.md` for dataset-specific provenance and storage conventions.
 
 ## Running the Pipeline
 
@@ -72,45 +68,56 @@ The CLI exposes all data preparation and model training settings. Basic example 
 spear \
   --base-dir "$(pwd)" \
   --models lstm transformer \
-  --gene-manifest data/embryonic/manifests/selected_genes_100.csv \
+  --gene-manifest /path/to/selected_genes.csv \
   --epochs 100 \
   --pseudobulk-group-size 20 \
   --device auto
 ```
 
+SPEAR can be run on Slurm-managed clusters; job scripts are internal.
+
+More flags and defaults are documented in `docs/config_reference.md`.
+
 Environment / CLI highlights:
 
 - `--gene-manifest` guarantees that every model trains on the same gene subset.
-- `--chromosomes genome-wide` (default) processes all annotations; provide a list to restrict loci.
+- `--chromosomes genome-wide` explicitly disables chromosome filtering; provide a list to restrict loci.
 - `--run-name` customises the output directory name.
 - `--device` supports `cuda`, `cpu`, or `auto` (prefers CUDA when available; falls back otherwise).
 - `--disable-pseudobulk` is a quick toggle to benchmark true single-cell training (equivalent to setting `--pseudobulk-group-size 1`).
 - `--atac-layer` lets you swap CPM for alternative ATAC transforms such as `tfidf` or disable normalisation entirely.
 
-For large sweeps, schedule via Slurm:
+### Example runs
 
 ```bash
-MODELS="transformer mlp" \
-RUN_NAME=allgenes_meta20_k5 \
-GENE_MANIFEST=data/embryonic/manifests/all_genes_annotated.csv \
-sbatch --array=1-4 jobs/slurm_spear_cellwise_chunked_gpu.sbatch
+# Per-gene baselines on CPU
+spear --per-gene --models ridge lasso ols --device cpu --run-name per_gene_baselines
 
-# CPU-only baseline (tree ensembles, SVR, etc.)
-MODELS="xgboost svr" \
-RUN_NAME=allgenes_meta20_k5_cpu \
-GENE_MANIFEST=data/embryonic/manifests/all_genes_annotated.csv \
-sbatch --array=1-4 jobs/slurm_spear_cellwise_chunked.sbatch
+# Multi-output torch run with smaller smoothing and no pseudobulk
+spear --models mlp transformer --smoothing-k 5 --disable-pseudobulk --run-name multi_output_no_bulk
 ```
-
-The script multiplies models × chunks across the array indices and auto-configures logging paths, environment setup, and manifest wiring.
 
 ## Results & Visualization
 
-1. Run the CLI (locally or via Slurm) to generate metrics, predictions, histories, and fitted artifacts.
+1. Run the CLI to generate metrics, predictions, histories, and fitted artifacts.
 2. Open `analysis/spear_results_analysis.ipynb` and execute the cells. Adjust `RUN_INCLUDE_GLOBS` at the top of the notebook if you want to focus on specific runs.
 3. Generated figures (violin plots, RMSE bars, scatter plots, epoch curves) are written back to `analysis/figs/` and CSV summaries are stored alongside them.
 
 Only per-gene **test-set** Pearson correlations are emphasised in the visualizations. Validation metrics remain available for context (e.g., epoch curves) but are not part of the main comparisons.
+
+### Output Layout
+
+Run artifacts are written under `output/results/spear_results/<run_name>/` with subfolders for each model. Each model directory includes metrics, predictions, histories, and (when enabled) feature-importance/SHAP exports.
+
+### Feature Importance & SHAP Artifacts
+
+Multi-output torch runs can emit feature-importance and SHAP summaries under each model directory:
+
+- `feature_importances_mean.csv`, `feature_importances_raw.npz`, `feature_importance_per_gene_summary.csv`
+- `feature_importance_mean.png`, `feature_importance_vs_tss_distance.png`
+- `shap_importances_mean.csv`, `shap_importance_mean.png`
+
+Use `scripts/plot_feature_importance_vs_tss.py` to build a publication-ready panel from these outputs.
 
 ## Supported Models
 
@@ -138,20 +145,18 @@ SVR defaults to a linear kernel with configurable hyperparameters via `TrainingC
 
 ### Utilities and scripts
 
-- `scripts/preflight_check.py`: quick readiness probe (env, packages, data paths, GTF, SLURM scripts). Run `python scripts/preflight_check.py --help` for options.
+- `scripts/preflight_check.py`: quick readiness probe (env, packages, data paths, GTF). Run `python scripts/preflight_check.py --help` for options.
 - `scripts/preprocess_endothelial.py`: RDS→AnnData conversion and QC for the endothelial dataset (barcode alignment, MT filtering, min genes/cells).
 
-### Optional dependency sets
+### Dependencies
 
-- Dev tooling: `pip install -r requirements-dev.txt` (ruff, black, pytest).
-- Notebook work: `pip install -r requirements-notebook.txt` (JupyterLab, ipykernel).
+All dependencies (runtime, dev, and notebooks) are listed in `requirements.txt`.
 
 ## Preprocessing Details
 
-1. **AnnData loading:** ATAC and RNA `h5ad` matrices are loaded through `anndata`, reindexed to a common cell ordering, and coerced to dense/sparse formats as required.
+1. **AnnData loading:** ATAC and RNA `h5ad` matrices are loaded through `anndata`, subset to shared barcodes, and aligned to a common ordering.
 2. **Modal layers:**
-
-   - ATAC: Counts-per-million is created by default (`training.atac_layer='counts_per_million'`); alternative transforms (such as TF–IDF) can be requested via configuration.
+   - ATAC: TF–IDF is created by default (`training.atac_layer='tfidf'`); alternative transforms (such as CPM) can be requested via configuration.
    - RNA: log1p CPM (`log1p_cpm`) layer computed on demand; if present, double transforms are skipped.
 
 3. **Gene feature extraction:** For each gene, the pipeline sums ATAC counts within ±10 kb windows, binned at 500 bp. Feature matrices are built on demand for each execution.
@@ -162,9 +167,30 @@ SVR defaults to a linear kernel with configurable hyperparameters via `TrainingC
 8. **Splitting:** Train/val/test fractions default to 0.70/0.15/0.15 with `GroupShuffleSplit` by `group_key` (fallback to random splits when too few groups).
 9. **Cross-validation:** Within the training split, models run 5-fold CV grouped by `group_key` when possible (else shuffled KFold) before fitting on the full training set.
 
-### Future Directions
+## Inference on New ATAC Data
 
-- **Shared peak matrix for multi-output models:** The current multi-output pipeline builds one wide feature matrix per run by horizontally concatenating each gene’s ±10 kb ATAC bins. At larger gene counts this duplicates peaks, inflates memory, and complicates scaling. A future optimisation is to construct a shared sparse matrix keyed by peak (or genomic bin) once, expose per-gene index views, and update the training/evaluation code to slice into that shared structure. The refactor touches `PeakIndexer`, feature extraction, the dataset dataclasses, and any downstream consumer that assumes a flat concatenation, but it would dramatically shrink memory usage and make scaling to thousands of genes feasible.
-- **Cross-dataset benchmarking:** Run the best-performing models on an external endothelial-cell dataset to validate generalisation beyond the current mESC cohort and surface modality-specific quirks early.
-- **Feature-pruned retraining:** Retrain the top model using only the top ~1,000 most important features to measure the trade-off between sparsity, compute cost, and predictive power.
-- **TSS-window sweep:** Constrain features to lie within X kb of each transcription start site and sweep/optimise X to pinpoint the most informative regulatory window for different model classes.
+Use the inference helper to generate predictions from a trained run directory:
+
+```bash
+python -m spear.predict \
+  --run-dir output/results/spear_results/<run_name> \
+  --model mlp \
+  --atac-path /path/to/new_atac.h5ad \
+  --output /path/to/predictions_inference.csv
+```
+
+## Troubleshooting
+
+- Missing data paths: confirm `--atac-path`, `--rna-path`, and `--gtf-path` or the default `data/` layout.
+- Barcode mismatch: ensure ATAC/RNA `obs_names` overlap and refer to the same cells.
+- Memory pressure: reduce `--max-genes`, increase `--bin-size-bp`, or use chunking to shrink feature matrices.
+
+## Documentation
+
+- Dataset notes: `docs/mouse_esc_dataset.md`, `docs/endothelial_dataset.md`
+- CLI/config reference: `docs/config_reference.md`
+- Runbook (ops-focused): `docs/master_runbook.md`
+
+## Citation
+
+If you use SPEAR, cite the original data sources and this repository (https://github.com/UzunLab/SPEAR). A formal software citation can be added once a DOI is available.

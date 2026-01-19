@@ -3,8 +3,7 @@
 
 SPEAR: Single-cell Prediction of gene Expression from ATAC-seq Regression.
 Validates environment, data files, dependencies, and configuration before launching
-expensive HPC jobs. Run this before submitting SLURM array jobs to catch
-configuration errors early.
+expensive HPC jobs. Run this to catch configuration errors early (SLURM job scripts are optional).
 
 Usage:
     python scripts/preflight_check.py
@@ -63,11 +62,14 @@ def check_required_packages() -> Tuple[bool, List[str]]:
     """Verify all required packages are installed."""
     required = [
         "anndata",
+        "catboost",
         "numpy",
         "pandas",
+        "psutil",
         "scipy",
         "sklearn",
         "scanpy",
+        "shap",
         "torch",
         "xgboost",
         "matplotlib",
@@ -91,11 +93,15 @@ def check_required_packages() -> Tuple[bool, List[str]]:
 
 
 def check_optional_packages() -> None:
-    """Check optional packages and warn if missing."""
-    optional = {
-        "catboost": "CatBoost model unavailable",
-        "psutil": "Resource monitoring disabled",
-    }
+    """Check optional packages and warn if missing.
+
+    This function is intentionally kept as a stub for future optional
+    dependencies. Add entries to the ``optional`` dict in the form
+    ``{"package_name": "why it's useful"}`` when such dependencies are
+    introduced.
+    """
+
+    optional = {}
     
     for pkg, warning in optional.items():
         try:
@@ -297,6 +303,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     results.append(check_python_version())
     pkg_ok, missing = check_required_packages()
     results.append(pkg_ok)
+
     check_optional_packages()
     results.append(check_pipeline_package())
     
@@ -349,12 +356,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     results.append(check_gtf_file(gtf_path))
     results.append(check_gene_manifest(args.gene_manifest))
     
-    # 4. SLURM scripts
-    print_header("4. SLURM Job Scripts")
+    # 4. SLURM scripts (optional)
+    print_header("4. SLURM Job Scripts (Optional)")
     cpu_script = base_dir / "jobs" / "slurm_spear_cellwise_chunked.sbatch"
     gpu_script = base_dir / "jobs" / "slurm_spear_cellwise_chunked_gpu.sbatch"
-    results.append(check_file_exists(cpu_script, "CPU SLURM script"))
-    results.append(check_file_exists(gpu_script, "GPU SLURM script"))
+    if cpu_script.exists():
+        results.append(check_file_exists(cpu_script, "CPU SLURM script"))
+    else:
+        print_warn(f"CPU SLURM script not found (optional): {cpu_script}")
+    if gpu_script.exists():
+        results.append(check_file_exists(gpu_script, "GPU SLURM script"))
+    else:
+        print_warn(f"GPU SLURM script not found (optional): {gpu_script}")
     
     # Summary
     print_header("Summary")
