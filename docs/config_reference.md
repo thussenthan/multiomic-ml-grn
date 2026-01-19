@@ -125,7 +125,7 @@ Values below come from `TrainingConfig` and apply unless overridden via CLI or J
 | -------------- | ------------------------------------------------ |
 | `atac_path`    | `data/embryonic/processed/combined_ATAC_qc.h5ad` |
 | `rna_path`     | `data/embryonic/processed/combined_RNA_qc.h5ad`  |
-| `gtf_path`     | `data/reference/GCF_000001635.27_genomic.gtf`    |
+| `gtf_path`     | `data/references/GCF_000001635.27_genomic.gtf`    |
 | `output_dir`   | `output/results`                                 |
 | `logs_dir`     | `output/logs`                                    |
 | `figures_dir`  | `analysis/figs`                                  |

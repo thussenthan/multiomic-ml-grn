@@ -277,7 +277,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--gtf-path",
         type=Path,
-        help="Override GTF path (default: data/reference/GCF_000001635.27_genomic.gtf)",
+        help="Override GTF path (default: data/references/GCF_000001635.27_genomic.gtf)",
     )
     parser.add_argument(
         "--gene-manifest",
@@ -344,7 +344,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.gtf_path:
         gtf_path = args.gtf_path.expanduser().resolve()
     else:
-        gtf_path = base_dir / "data" / "reference" / "GCF_000001635.27_genomic.gtf"
+        gtf_path = base_dir / "data" / "references" / "GCF_000001635.27_genomic.gtf"
     
     if not args.skip_data_checks:
         results.append(check_h5ad_file(atac_path, "ATAC AnnData"))

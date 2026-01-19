@@ -1139,8 +1139,15 @@ def _compute_torch_shap_importance(
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             x = _reshape_tensor_for_model(x, self.reshape)
             out = self.inner(x)
-            if out.ndim > 1:
-                return out.mean(dim=1)
+            if out.ndim == 1:
+                return out.unsqueeze(1)
+            if out.ndim == 2:
+                if out.shape[1] > 1:
+                    return out.mean(dim=1, keepdim=True)
+                return out
+            out = out.reshape(out.shape[0], -1)
+            if out.shape[1] > 1:
+                return out.mean(dim=1, keepdim=True)
             return out
 
     wrapper = _ShapWrapper(model, bundle.reshape)

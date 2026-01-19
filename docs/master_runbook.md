@@ -24,7 +24,7 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 
 - Raw GEO downloads and curated AnnData layouts are documented in `docs/mouse_esc_dataset.md` and `docs/endothelial_dataset.md`.
 - Gene manifests live under `data/embryonic/manifests/` and define target scopes for each run.
-- Reference annotations are kept in `data/reference/`.
+- Reference annotations are kept in `data/references/`.
 
 ## Stage 1 - Bootstrap Environment
 
@@ -52,7 +52,7 @@ This runbook connects the biological motivation for the mouse embryonic stem cel
 - Review `docs/mouse_esc_dataset.md` or `docs/endothelial_dataset.md` for provenance and sample inventory.
 - Download raw data from GEO accession GSE205117 and place in `data/embryonic/raw/`.
 - Preprocess data using scripts in `scripts/` to generate AnnData files in `data/embryonic/processed/`.
-- Ensure reference GTF files are present in `data/reference/`.
+- Ensure reference GTF files are present in `data/references/`.
 
 ### Stage 2 - Computer science perspective
 

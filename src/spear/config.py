@@ -42,7 +42,7 @@ class PathsConfig:
         fallback_data_dirs = ["data/embryonic/processed", "data/raw"]
         atac_path = _resolve(atac_filename, fallback_data_dirs)
         rna_path = _resolve(rna_filename, fallback_data_dirs)
-        gtf_path = _resolve(gtf_filename, ["data/reference"])
+        gtf_path = _resolve(gtf_filename, ["data/references"])
         output_root = (root / "output").resolve()
         output_dir = (output_root / "results").resolve()
         logs_dir = (output_root / "logs").resolve()

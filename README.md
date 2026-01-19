@@ -111,7 +111,7 @@ Run artifacts are written under `output/results/spear_results/<run_name>/` with 
 
 ### Feature Importance & SHAP Artifacts
 
-Multi-output torch runs can emit feature-importance and SHAP summaries under each model directory:
+Multi-output torch runs can emit feature-importance and SHAP summaries under each model directory. Non-torch models do not produce SHAP outputs in the current pipeline.
 
 - `feature_importances_mean.csv`, `feature_importances_raw.npz`, `feature_importance_per_gene_summary.csv`
 - `feature_importance_mean.png`, `feature_importance_vs_tss_distance.png`
